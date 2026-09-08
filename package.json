@@ -1,0 +1,16 @@
+{
+  "name": "liquor-express",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Sistema de administración Liquor Express — monorepo (web Next.js + api Express). JCA Soft · Kaizen",
+  "scripts": {
+    "dev": "concurrently -n web,api -c cyan,magenta \"npm:dev:web\" \"npm:dev:api\"",
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:api": "npm --prefix apps/api run dev",
+    "install:all": "npm --prefix apps/web install && npm --prefix apps/api install",
+    "build": "npm --prefix apps/web run build && npm --prefix apps/api run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}

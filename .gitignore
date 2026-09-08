@@ -1,0 +1,25 @@
+# dependencias
+node_modules/
+**/node_modules/
+
+# builds
+dist/
+**/dist/
+.next/
+**/.next/
+out/
+
+# next
+next-env.d.ts
+*.tsbuildinfo
+
+# entornos (nunca subir credenciales)
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# varios
+.DS_Store
+*.local
+npm-debug.log*
