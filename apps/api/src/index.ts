@@ -22,8 +22,10 @@ app.get('/api/productos', async (_req, res) => {
   res.json({ fuente: 'supabase', productos: data })
 })
 
-const port = Number(process.env.PORT ?? 4000)
+// Puerto INTERNO del API. En producción, Next toma el puerto público (PORT)
+// y redirige /api hacia este puerto; por eso el API no debe usar PORT.
+const port = Number(process.env.API_PORT ?? 4000)
 app.listen(port, () => {
-  console.log(`API Liquor Express escuchando en http://localhost:${port}`)
+  console.log(`API Liquor Express (interno) en http://127.0.0.1:${port}`)
   console.log(`Base de datos: ${hayBD() ? 'Supabase conectada' : 'sin configurar (modo desarrollo)'}`)
 })
