@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
+import { DialogProvider } from '../components/Dialog'
 
 export const metadata: Metadata = {
   title: 'Liquor Express',
@@ -13,7 +14,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es">
-      <body>{children}</body>
+      <body>
+        <script dangerouslySetInnerHTML={{ __html: `try{var t=localStorage.getItem('le_tema');if(t)document.documentElement.dataset.theme=t;}catch(e){}` }} />
+        <DialogProvider>{children}</DialogProvider>
+      </body>
     </html>
   )
 }

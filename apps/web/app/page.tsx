@@ -19,10 +19,14 @@ export default function Home() {
         <h3>Estado del proyecto</h3>
         <ul>
           <li><span className="dot ok" /> <span><b>Base técnica</b> — monorepo web + api, esquema de BD listo</span></li>
-          <li><span className="dot next" /> <span><b>Autenticación y seguridad</b> — en curso</span></li>
+          <li><span className="dot ok" /> <span><b>Autenticación y seguridad</b> — login + roles + RLS</span></li>
           <li><span className="dot next" /> <span><b>Inventario</b> — siguiente</span></li>
         </ul>
       </div>
+
+      <a className="pill" href="/login" style={{ marginTop: 24, color: 'var(--amber-bright)', borderColor: 'var(--line-strong)' }}>
+        Ingresar al sistema →
+      </a>
 
       <div className="foot">JCA Soft — Soluciones que impulsan tu negocio</div>
     </main>
