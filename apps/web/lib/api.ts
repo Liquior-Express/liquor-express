@@ -12,8 +12,20 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
   const t = leerToken()
   if (t) headers.set('Authorization', `Bearer ${t}`)
 
-  const res = await fetch(path, { ...init, headers })
+  let res: Response
+  try {
+    res = await fetch(path, { ...init, headers })
+  } catch {
+    // Sin red o servidor caído: mensaje claro en vez de "Failed to fetch".
+    const err = new Error('Sin conexión con el servidor. Revisa el internet e intenta de nuevo.') as Error & { status?: number }
+    err.status = 0
+    throw err
+  }
   const json = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(json?.error ?? `Error ${res.status}`)
+  if (!res.ok) {
+    const err = new Error(json?.error ?? `Error ${res.status}`) as Error & { status?: number }
+    err.status = res.status
+    throw err
+  }
   return json as T
 }

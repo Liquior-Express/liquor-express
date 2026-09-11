@@ -63,10 +63,12 @@ app.post('/api/auth/login', async (req, res) => {
   const { usuario, password } = req.body ?? {}
   if (!usuario || !password) return res.status(400).json({ error: 'Usuario y contraseña son obligatorios' })
 
-  const { data: u } = await db().from('usuarios')
+  // Tabla pequeña: se compara en memoria sin distinguir mayúsculas (evita los comodines de ilike: % _ *).
+  const { data: lista, error: errU } = await db().from('usuarios')
     .select('id, usuario, nombre, rol, activo, password_hash')
-    .ilike('usuario', String(usuario).trim())
-    .single()
+  if (errU) return res.status(503).json({ error: 'No se pudo conectar con la base de datos. Intenta de nuevo.' })
+  const buscado = String(usuario).trim().toLowerCase()
+  const u = (lista ?? []).find((x) => String(x.usuario ?? '').toLowerCase() === buscado)
 
   const ok = u && u.activo && u.password_hash && await verificarClave(String(password), u.password_hash)
   if (!ok) return res.status(401).json({ error: 'Usuario o contraseña incorrectos' })
@@ -209,6 +211,12 @@ async function sincronizarLote(productoId: string, fecha: string | null, cantida
   }
 }
 
+// Registra un movimiento en el kardex (no interrumpe el flujo).
+async function registrarMovimiento(productoId: string, tipo: 'entrada' | 'venta' | 'merma' | 'ajuste', cantidad: number, usuarioId: string, referencia?: string) {
+  if (!supabase) return
+  try { await db().from('movimientos_inventario').insert({ producto_id: productoId, tipo, cantidad, usuario_id: usuarioId, referencia }) } catch {}
+}
+
 // Campos editables/creables de un producto.
 function saneaProducto(body: any) {
   const p: Record<string, unknown> = {}
@@ -232,6 +240,7 @@ app.post('/api/productos', autenticar, requiereRol('admin', 'gerencia'), async (
   if (data.controla_vencimiento && req.body?.fecha_vencimiento) {
     await sincronizarLote(data.id, req.body.fecha_vencimiento, data.existencias, data.costo)
   }
+  if (Number(data.existencias) > 0) await registrarMovimiento(data.id, 'entrada', Number(data.existencias), req.usuario!.id, 'alta de producto')
   await auditar(req.usuario!.id, 'crear_producto', 'productos', data.id, { nombre: data.nombre })
   res.status(201).json({ producto: data })
 })
@@ -241,11 +250,21 @@ app.patch('/api/productos/:id', autenticar, requiereRol('admin', 'gerencia'), as
   const p = saneaProducto(req.body ?? {})
   if (Object.keys(p).length === 0) return res.status(400).json({ error: 'Nada que actualizar' })
 
+  // Existencias previas para registrar el ajuste en el kardex.
+  let prevExist: number | null = null
+  if (p.existencias !== undefined) {
+    const { data: cur } = await db().from('productos').select('existencias').eq('id', id).single()
+    prevExist = cur ? Number(cur.existencias) : null
+  }
+
   const { data, error } = await db().from('productos').update(p).eq('id', id).select('*').single()
   if (error) return res.status(500).json({ error: error.message })
 
   if (req.body?.fecha_vencimiento !== undefined && data.controla_vencimiento) {
     await sincronizarLote(id, req.body.fecha_vencimiento, data.existencias, data.costo)
+  }
+  if (prevExist !== null && Number(p.existencias) !== prevExist) {
+    await registrarMovimiento(id, 'ajuste', Number(p.existencias) - prevExist, req.usuario!.id, 'ajuste manual')
   }
 
   // Auditar cambios sensibles de precio/costo.
@@ -257,8 +276,95 @@ app.patch('/api/productos/:id', autenticar, requiereRol('admin', 'gerencia'), as
   res.json({ producto: data })
 })
 
+// ── Presentaciones (fraccionamiento: caja / six / cartón / cajetilla / unidad) ──
+app.get('/api/productos/:id/presentaciones', autenticar, async (req, res) => {
+  const { data, error } = await db().from('presentaciones').select('id, nombre, factor_unidades, precio').eq('producto_id', req.params.id).order('factor_unidades', { ascending: false })
+  if (error) return res.status(500).json({ error: error.message })
+  res.json({ presentaciones: data })
+})
+
+app.post('/api/productos/:id/presentaciones', autenticar, requiereRol('admin', 'gerencia'), async (req, res) => {
+  const { nombre, factor_unidades, precio } = req.body ?? {}
+  if (!nombre || !factor_unidades) return res.status(400).json({ error: 'Nombre y factor son obligatorios' })
+  const { data, error } = await db().from('presentaciones')
+    .insert({ producto_id: req.params.id, nombre: String(nombre).trim(), factor_unidades: Number(factor_unidades), precio: Number(precio) || 0 })
+    .select('id, nombre, factor_unidades, precio').single()
+  if (error) return res.status(500).json({ error: error.message })
+  res.status(201).json({ presentacion: data })
+})
+
+app.delete('/api/presentaciones/:pid', autenticar, requiereRol('admin', 'gerencia'), async (req, res) => {
+  const { error } = await db().from('presentaciones').delete().eq('id', req.params.pid)
+  if (error) return res.status(500).json({ error: error.message })
+  res.json({ ok: true })
+})
+
+// ── Kardex (movimientos de inventario) ──────────────────────
+app.get('/api/productos/:id/movimientos', autenticar, async (req, res) => {
+  const { data, error } = await db().from('movimientos_inventario')
+    .select('id, tipo, cantidad, referencia, creado_en').eq('producto_id', req.params.id)
+    .order('creado_en', { ascending: false }).limit(50)
+  if (error) return res.status(500).json({ error: error.message })
+  res.json({ movimientos: data })
+})
+
+// ── Mermas (bajas con motivo) ───────────────────────────────
+app.post('/api/productos/:id/merma', autenticar, requiereRol('admin', 'gerencia'), async (req, res) => {
+  const { id } = req.params
+  const cantidad = Number(req.body?.cantidad)
+  const motivo = req.body?.motivo
+  if (!cantidad || cantidad <= 0) return res.status(400).json({ error: 'Cantidad inválida' })
+  if (!['vencido', 'faltante', 'averia'].includes(motivo)) return res.status(400).json({ error: 'Motivo inválido' })
+
+  const { data: prod } = await db().from('productos').select('existencias').eq('id', id).single()
+  if (!prod) return res.status(404).json({ error: 'Producto no encontrado' })
+  const nueva = Number(prod.existencias) - cantidad
+
+  await db().from('mermas').insert({ producto_id: id, cantidad, motivo, usuario_id: req.usuario!.id })
+  const { error } = await db().from('productos').update({ existencias: nueva }).eq('id', id)
+  if (error) return res.status(500).json({ error: error.message })
+  await registrarMovimiento(id, 'merma', -cantidad, req.usuario!.id, motivo)
+  await auditar(req.usuario!.id, 'merma', 'productos', id, { cantidad, motivo })
+  res.json({ ok: true, existencias: nueva })
+})
+
+// ── Foto del producto (Supabase Storage, bucket público `productos`) ──
+app.post('/api/productos/:id/foto', autenticar, requiereRol('admin', 'gerencia'), async (req, res) => {
+  const m = /^data:(image\/(png|jpe?g|webp));base64,(.+)$/i.exec(req.body?.foto ?? '')
+  if (!m) return res.status(400).json({ error: 'Imagen inválida' })
+  const contentType = m[1].toLowerCase()
+  const ext = /jpe?g/i.test(m[2]) ? 'jpg' : m[2].toLowerCase()
+  const buffer = Buffer.from(m[3], 'base64')
+  if (buffer.length > 3_000_000) return res.status(400).json({ error: 'La imagen supera 3 MB' })
+
+  const ruta = `${req.params.id}.${ext}`
+  const { error: errUp } = await db().storage.from('productos').upload(ruta, buffer, { contentType, upsert: true })
+  if (errUp) return res.status(500).json({ error: errUp.message })
+  const { data: pub } = db().storage.from('productos').getPublicUrl(ruta)
+  const foto_url = `${pub.publicUrl}?v=${Date.now()}`
+  const { error } = await db().from('productos').update({ foto_url }).eq('id', req.params.id)
+  if (error) return res.status(500).json({ error: error.message })
+  res.json({ foto_url })
+})
+
+app.delete('/api/productos/:id/foto', autenticar, requiereRol('admin', 'gerencia'), async (req, res) => {
+  await db().storage.from('productos').remove([`${req.params.id}.jpg`, `${req.params.id}.png`, `${req.params.id}.webp`])
+  await db().from('productos').update({ foto_url: null }).eq('id', req.params.id)
+  res.json({ ok: true })
+})
+
+// Crea el bucket de fotos si no existe (idempotente).
+async function asegurarBucket() {
+  if (!supabase) return
+  try {
+    const { data } = await db().storage.getBucket('productos')
+    if (!data) await db().storage.createBucket('productos', { public: true })
+  } catch { /* si ya existe u otro caso, se ignora */ }
+}
+
 const port = Number(process.env.API_PORT ?? 4000)
 app.listen(port, () => {
   console.log(`API Liquor Express (interno) en http://127.0.0.1:${port}`)
   console.log(`Base de datos: ${hayBD() ? 'Supabase conectada' : 'sin configurar (modo desarrollo)'}`)
+  asegurarBucket()
 })

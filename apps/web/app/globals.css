@@ -176,6 +176,16 @@ td.num, th.num{ text-align:right; font-variant-numeric:tabular-nums }
   .appbar{ padding:12px 16px } .appbar .usuario-chip span:not(.badge){ display:none }
 }
 
+/* Miniatura y foto de producto */
+.miniatura{ width:34px; height:34px; border-radius:8px; object-fit:cover; border:1px solid var(--line); flex:none }
+.miniatura.vacia{ display:flex; align-items:center; justify-content:center; background:var(--surface); font-size:16px }
+.foto-prod{ width:88px; height:88px; border-radius:12px; object-fit:cover; border:1px solid var(--line-strong); flex:none }
+.foto-prod.vacia{ display:flex; align-items:center; justify-content:center; background:var(--surface); font-size:34px }
+
+/* Secciones dentro del modal de producto */
+.sep-modal{ height:1px; background:var(--line); margin:20px 0 14px }
+.sub-modal{ font-size:13px; font-weight:600; color:var(--text); margin-bottom:10px }
+
 /* Sello sutil para productos POLA */
 .sello-pola{ display:inline-flex; align-items:center; gap:5px; margin-left:8px; font-size:10px; font-weight:600;
   letter-spacing:.03em; color:var(--teal); vertical-align:middle }

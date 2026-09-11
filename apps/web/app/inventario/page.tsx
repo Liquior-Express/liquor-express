@@ -11,12 +11,35 @@ interface Categoria { id: string; nombre: string }
 interface Producto {
   id: string; nombre: string; categoria_id: string | null; categoria_nombre: string | null
   unidad_base: string; costo?: number; costos_variables?: number; margen_pct?: number
-  precio_venta: number; existencias: number; stock_min: number
+  precio_venta: number; existencias: number; stock_min: number; foto_url: string | null
   es_pola: boolean; controla_vencimiento: boolean; vence_el: string | null; activo: boolean
 }
+interface Presentacion { id: string; nombre: string; factor_unidades: number; precio: number }
+interface Movimiento { id: string; tipo: string; cantidad: number; referencia: string | null; creado_en: string }
 
 const money = (n: number) => '$' + (Number(n) || 0).toLocaleString('es-CO', { maximumFractionDigits: 0 })
 const hoyMas = (dias: number) => { const d = new Date(); d.setDate(d.getDate() + dias); return d }
+const fechaCorta = (s: string) => new Date(s).toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' })
+const TIPO_MOV: Record<string, string> = { entrada: 'Entrada', venta: 'Venta', merma: 'Merma', ajuste: 'Ajuste' }
+
+// Reduce la imagen en el navegador antes de subirla (máx. 800 px, JPEG).
+function comprimirImagen(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      const max = 800
+      const escala = Math.min(1, max / Math.max(img.width, img.height))
+      const c = document.createElement('canvas')
+      c.width = Math.round(img.width * escala); c.height = Math.round(img.height * escala)
+      c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height)
+      URL.revokeObjectURL(url)
+      resolve(c.toDataURL('image/jpeg', 0.82))
+    }
+    img.onerror = reject
+    img.src = url
+  })
+}
 
 const vacio = {
   nombre: '', categoria_id: '', unidad_base: 'unidad',
@@ -41,6 +64,15 @@ function InventarioContenido() {
   const [editando, setEditando] = useState<Producto | 'nuevo' | null>(null)
   const [form, setForm] = useState({ ...vacio })
   const [msg, setMsg] = useState<string | null>(null)
+
+  // Detalle del producto en edición: presentaciones, kardex, foto, merma.
+  const [presentaciones, setPresentaciones] = useState<Presentacion[]>([])
+  const [movimientos, setMovimientos] = useState<Movimiento[]>([])
+  const [presForm, setPresForm] = useState({ nombre: '', factor_unidades: '', precio: '' })
+  const [mermaForm, setMermaForm] = useState({ cantidad: '', motivo: 'vencido' })
+  const [fotoUrl, setFotoUrl] = useState<string | null>(null)
+  const [subiendo, setSubiendo] = useState(false)
+  const editId = editando && editando !== 'nuevo' ? editando.id : null
 
   // Caja no gestiona inventario.
   useEffect(() => { if (me.usuario.rol === 'cajero') router.replace('/panel') }, [me, router])
@@ -75,8 +107,12 @@ function InventarioContenido() {
     })
   }
 
-  function abrirNuevo() { setForm({ ...vacio }); setMsg(null); setEditando('nuevo') }
-  function abrirEditar(p: Producto) {
+  function abrirNuevo() {
+    setForm({ ...vacio }); setMsg(null); setPresentaciones([]); setMovimientos([]); setFotoUrl(null)
+    setPresForm({ nombre: '', factor_unidades: '', precio: '' }); setMermaForm({ cantidad: '', motivo: 'vencido' })
+    setEditando('nuevo')
+  }
+  async function abrirEditar(p: Producto) {
     setMsg(null)
     setForm({
       nombre: p.nombre, categoria_id: p.categoria_id ?? '', unidad_base: p.unidad_base,
@@ -85,7 +121,55 @@ function InventarioContenido() {
       existencias: String(p.existencias), stock_min: String(p.stock_min),
       es_pola: p.es_pola, controla_vencimiento: p.controla_vencimiento, fecha_vencimiento: p.vence_el ?? '',
     })
+    setFotoUrl(p.foto_url); setPresForm({ nombre: '', factor_unidades: '', precio: '' }); setMermaForm({ cantidad: '', motivo: 'vencido' })
     setEditando(p)
+    try {
+      const [pr, mv] = await Promise.all([
+        apiFetch<{ presentaciones: Presentacion[] }>(`/api/productos/${p.id}/presentaciones`),
+        apiFetch<{ movimientos: Movimiento[] }>(`/api/productos/${p.id}/movimientos`),
+      ])
+      setPresentaciones(pr.presentaciones); setMovimientos(mv.movimientos)
+    } catch { setPresentaciones([]); setMovimientos([]) }
+  }
+
+  async function subirFoto(file: File) {
+    if (!editId) return
+    setSubiendo(true); setMsg(null)
+    try {
+      const dataUrl = await comprimirImagen(file)
+      const r = await apiFetch<{ foto_url: string }>(`/api/productos/${editId}/foto`, { method: 'POST', body: JSON.stringify({ foto: dataUrl }) })
+      setFotoUrl(r.foto_url); cargar()
+    } catch (e: any) { setMsg(e.message ?? 'No se pudo subir la foto') } finally { setSubiendo(false) }
+  }
+  async function quitarFoto() {
+    if (!editId) return
+    try { await apiFetch(`/api/productos/${editId}/foto`, { method: 'DELETE' }); setFotoUrl(null); cargar() } catch (e: any) { setMsg(e.message) }
+  }
+  async function agregarPresentacion(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editId) return
+    try {
+      const r = await apiFetch<{ presentacion: Presentacion }>(`/api/productos/${editId}/presentaciones`, { method: 'POST', body: JSON.stringify(presForm) })
+      setPresentaciones((ps) => [...ps, r.presentacion].sort((a, b) => b.factor_unidades - a.factor_unidades))
+      setPresForm({ nombre: '', factor_unidades: '', precio: '' })
+    } catch (e: any) { setMsg(e.message) }
+  }
+  async function borrarPresentacion(pid: string) {
+    try { await apiFetch(`/api/presentaciones/${pid}`, { method: 'DELETE' }); setPresentaciones((ps) => ps.filter((x) => x.id !== pid)) } catch (e: any) { setMsg(e.message) }
+  }
+  async function registrarMerma(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editId) return
+    const ok = await dialog.confirmar({ title: 'Registrar merma', message: `Se descontarán ${mermaForm.cantidad} unidad(es) por "${mermaForm.motivo}". ¿Confirmar?`, confirmText: 'Registrar', peligro: true })
+    if (!ok) return
+    try {
+      await apiFetch(`/api/productos/${editId}/merma`, { method: 'POST', body: JSON.stringify(mermaForm) })
+      setMermaForm({ cantidad: '', motivo: 'vencido' })
+      setMsg('Merma registrada')
+      const p = productos.find((x) => x.id === editId)
+      if (p) await abrirEditar({ ...p })
+      cargar()
+    } catch (e: any) { setMsg(e.message) }
   }
 
   async function guardar(e: React.FormEvent) {
@@ -152,12 +236,17 @@ function InventarioContenido() {
               return (
                 <tr key={p.id} className={p.activo ? '' : 'inactivo'} onClick={() => abrirEditar(p)}>
                   <td>
-                    {p.nombre}
-                    {p.categoria_nombre && <span className="faint"> · {p.categoria_nombre}</span>}
-                    {p.es_pola && <span className="sello-pola">POLA</span>}
-                    {vencido && <span className="chip warn">Vencido</span>}
-                    {porVencer && <span className="chip vence">Por vencer</span>}
-                    {!p.activo && <span className="faint"> (inactivo)</span>}
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      {p.foto_url ? <img src={p.foto_url} alt="" className="miniatura" /> : <span className="miniatura vacia">🍾</span>}
+                      <span>
+                        {p.nombre}
+                        {p.categoria_nombre && <span className="faint"> · {p.categoria_nombre}</span>}
+                        {p.es_pola && <span className="sello-pola">POLA</span>}
+                        {vencido && <span className="chip warn">Vencido</span>}
+                        {porVencer && <span className="chip vence">Por vencer</span>}
+                        {!p.activo && <span className="faint"> (inactivo)</span>}
+                      </span>
+                    </span>
                   </td>
                   <td className="num">{p.existencias}{bajo && <span className="chip warn">Bajo</span>}</td>
                   {ve && <td className="num">{money(p.costo ?? 0)}</td>}
@@ -233,6 +322,73 @@ function InventarioContenido() {
           {msg && <div className="alert">{msg}</div>}
           <button className="btn" type="submit">{editando === 'nuevo' ? 'Crear producto' : 'Guardar cambios'}</button>
         </form>
+
+        {editando === 'nuevo' && (
+          <p className="faint" style={{ marginTop: 14 }}>Guarda el producto para agregar foto, presentaciones y registrar mermas.</p>
+        )}
+
+        {editId && (
+          <div style={{ marginTop: 8 }}>
+            {/* Foto */}
+            <div className="sep-modal" />
+            <h4 className="sub-modal">Foto</h4>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              {fotoUrl ? <img src={fotoUrl} alt="" className="foto-prod" /> : <span className="foto-prod vacia">🍾</span>}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label className="btn ghost" style={{ marginTop: 0, cursor: 'pointer', textAlign: 'center' }}>
+                  {subiendo ? 'Subiendo…' : (fotoUrl ? 'Cambiar foto' : 'Subir foto')}
+                  <input type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) subirFoto(f); e.currentTarget.value = '' }} />
+                </label>
+                {fotoUrl && <button type="button" className="link-btn" onClick={quitarFoto}>Quitar foto</button>}
+              </div>
+            </div>
+
+            {/* Presentaciones / fraccionamiento */}
+            <div className="sep-modal" />
+            <h4 className="sub-modal">Presentaciones <span className="faint" style={{ fontWeight: 400 }}>(caja, six, cartón, cajetilla…)</span></h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+              {presentaciones.map((pr) => (
+                <div key={pr.id} className="row-between" style={{ fontSize: 13.5 }}>
+                  <span>{pr.nombre} <span className="faint">· {pr.factor_unidades} und · {money(pr.precio)}</span></span>
+                  <button type="button" className="link-btn" title="Quitar" onClick={() => borrarPresentacion(pr.id)}>✕</button>
+                </div>
+              ))}
+              {presentaciones.length === 0 && <span className="faint">Sin presentaciones. Se vende por {form.unidad_base}.</span>}
+            </div>
+            <form onSubmit={agregarPresentacion} style={{ display: 'grid', gridTemplateColumns: '1fr 84px 96px auto', gap: 8, alignItems: 'end' }}>
+              <div className="field"><label>Nombre</label><input value={presForm.nombre} placeholder="Caja" onChange={(e) => setPresForm({ ...presForm, nombre: e.target.value })} required /></div>
+              <div className="field"><label>Unidades</label><input type="number" inputMode="numeric" value={presForm.factor_unidades} placeholder="30" onChange={(e) => setPresForm({ ...presForm, factor_unidades: e.target.value })} required /></div>
+              <div className="field"><label>Precio</label><input type="number" inputMode="numeric" value={presForm.precio} onChange={(e) => setPresForm({ ...presForm, precio: e.target.value })} /></div>
+              <button className="btn" type="submit" style={{ marginTop: 0, padding: '0 14px', height: 42 }}>＋</button>
+            </form>
+
+            {/* Merma */}
+            <div className="sep-modal" />
+            <h4 className="sub-modal">Registrar merma</h4>
+            <form onSubmit={registrarMerma} style={{ display: 'grid', gridTemplateColumns: '96px 1fr auto', gap: 8, alignItems: 'end' }}>
+              <div className="field"><label>Cantidad</label><input type="number" inputMode="numeric" value={mermaForm.cantidad} onChange={(e) => setMermaForm({ ...mermaForm, cantidad: e.target.value })} required /></div>
+              <div className="field"><label>Motivo</label>
+                <select value={mermaForm.motivo} onChange={(e) => setMermaForm({ ...mermaForm, motivo: e.target.value })}>
+                  <option value="vencido">Vencido</option><option value="faltante">Faltante</option><option value="averia">Avería</option>
+                </select>
+              </div>
+              <button className="btn peligro" type="submit" style={{ marginTop: 0, padding: '0 14px', height: 42 }}>Registrar</button>
+            </form>
+
+            {/* Kardex */}
+            <div className="sep-modal" />
+            <h4 className="sub-modal">Movimientos (kardex)</h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 180, overflowY: 'auto' }}>
+              {movimientos.map((m) => (
+                <div key={m.id} className="row-between" style={{ fontSize: 12.5 }}>
+                  <span>{TIPO_MOV[m.tipo] ?? m.tipo} {m.referencia && <span className="faint">· {m.referencia}</span>}</span>
+                  <span><b style={{ color: m.cantidad < 0 ? 'var(--copper)' : 'var(--teal)' }}>{m.cantidad > 0 ? '+' : ''}{m.cantidad}</b> <span className="faint">{fechaCorta(m.creado_en)}</span></span>
+                </div>
+              ))}
+              {movimientos.length === 0 && <span className="faint">Sin movimientos.</span>}
+            </div>
+          </div>
+        )}
       </Modal>
     </>
   )

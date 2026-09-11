@@ -49,12 +49,14 @@ export async function autenticar(req: Request, res: Response, next: NextFunction
     return res.status(401).json({ error: 'Sesión inválida o expirada' })
   }
 
-  const { data: u } = await supabase
+  const { data: u, error: errU } = await supabase
     .from('usuarios')
     .select('id, usuario, nombre, rol, activo')
     .eq('id', payload.sub)
-    .single()
+    .maybeSingle()
 
+  // Una falla de conexión con la BD NO es una sesión inválida: no sacar al usuario por un corte de internet.
+  if (errU) return res.status(503).json({ error: 'No se pudo verificar la sesión. Revisa la conexión e intenta de nuevo.' })
   if (!u) return res.status(401).json({ error: 'Usuario no encontrado' })
   if (!u.activo) return res.status(403).json({ error: 'Usuario inactivo' })
 

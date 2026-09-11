@@ -47,7 +47,8 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
     apiFetch<Me>('/api/auth/me')
       .then(setMe)
       .catch((e) => {
-        if (String(e.message).match(/token|inválida|expirada|autenticado/i)) { borrarToken(); router.replace('/login') }
+        // Sesión que ya no sirve (usuario eliminado, token vencido o alterado) → volver al login.
+        if (e?.status === 401 || String(e.message).match(/token|inválida|expirada|autenticado/i)) { borrarToken(); router.replace('/login') }
         else setError(e.message)
       })
       .finally(() => setCargando(false))
@@ -64,7 +65,8 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
   if (error) return (
     <div className="auth-wrap"><div className="card">
       <div className="alert">{error}</div>
-      <button className="btn ghost" style={{ marginTop: 16 }} onClick={salir}>Volver a ingresar</button>
+      <button className="btn" style={{ marginTop: 16, width: '100%' }} onClick={() => window.location.reload()}>Reintentar</button>
+      <button className="btn ghost" style={{ marginTop: 10, width: '100%' }} onClick={salir}>Volver a ingresar</button>
     </div></div>
   )
   if (!me) return null
