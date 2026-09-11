@@ -357,6 +357,10 @@ app.delete('/api/productos/:id/foto', autenticar, requiereRol('admin', 'gerencia
 import { registrarExtras } from './rutas/extras.ts'
 registrarExtras(app, { db, auditar, registrarMovimiento })
 
+// Sprint 2: ventas rápidas + caja (apertura, entradas/salidas, cierre en pesos y reales).
+import { registrarVentasYCaja } from './rutas/ventas.ts'
+registrarVentasYCaja(app, { db, auditar, registrarMovimiento })
+
 // Crea el bucket de fotos si no existe (idempotente).
 async function asegurarBucket() {
   if (!supabase) return

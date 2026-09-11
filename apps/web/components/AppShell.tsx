@@ -25,7 +25,7 @@ const NAV: ItemNav[] = [
   { key: 'ventas', label: 'Ventas rápidas', href: '/ventas', icono: '⚡' },
   { key: 'inventario', label: 'Inventario', href: '/inventario', icono: '📦', roles: ['admin', 'gerencia'] },
   { key: 'compras', label: 'Compras', icono: '📥', roles: ['admin', 'gerencia'], pronto: true },
-  { key: 'caja', label: 'Caja', icono: '💵', pronto: true },
+  { key: 'caja', label: 'Caja', href: '/caja', icono: '💵' },
   { key: 'reportes', label: 'Reportes', icono: '📊', roles: ['admin', 'gerencia'], pronto: true },
 ]
 

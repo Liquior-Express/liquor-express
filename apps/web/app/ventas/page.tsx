@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { apiFetch } from '../../lib/api'
 import { AppShell, useSesion } from '../../components/AppShell'
 import { useDialog } from '../../components/Dialog'
-import { CambioEfectivo } from '../../components/CambioEfectivo'
+import { CambioEfectivo, PAGO_INICIAL, type PagoEfectivo } from '../../components/CambioEfectivo'
 
 interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null }
 interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; precio: number }
@@ -13,6 +13,7 @@ interface Resumen { cantidad: number; total: number; por_medio: Record<string, n
 type Medio = 'efectivo' | 'nequi' | 'bold' | 'pix'
 
 const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO')
+const reales = (n: number) => 'R$ ' + (Number(n) || 0).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const MEDIOS: { id: Medio; label: string }[] = [
   { id: 'efectivo', label: '💵 Efectivo' }, { id: 'nequi', label: '📱 Nequi' },
   { id: 'bold', label: '💳 Bold' }, { id: 'pix', label: '🇧🇷 PIX (R$)' },
@@ -33,24 +34,28 @@ function Ventas() {
   const [productos, setProductos] = useState<Producto[]>([])
   const [pres, setPres] = useState<Pres[]>([])
   const [tasa, setTasa] = useState<{ valor: number; es_de_hoy: boolean } | null>(null)
+  const [cajaAbierta, setCajaAbierta] = useState<boolean | null>(null)
   const [resumen, setResumen] = useState<Resumen | null>(null)
   const [buscar, setBuscar] = useState('')
   const [carrito, setCarrito] = useState<Linea[]>([])
   const [medio, setMedio] = useState<Medio>('efectivo')
+  const [pago, setPago] = useState<PagoEfectivo>(PAGO_INICIAL)
   const [cobrando, setCobrando] = useState(false)
   const [msg, setMsg] = useState<{ tipo: 'ok' | 'error'; texto: string } | null>(null)
 
   const cargar = useCallback(async () => {
-    const [p, pr, t, v] = await Promise.all([
+    const [p, pr, t, v, c] = await Promise.all([
       apiFetch<{ productos: Producto[] }>('/api/productos'),
       apiFetch<{ presentaciones: Pres[] }>('/api/presentaciones'),
       apiFetch<{ tasa: { valor: number } | null; es_de_hoy: boolean }>('/api/tasa'),
       apiFetch<{ resumen: Resumen }>('/api/ventas/hoy'),
+      apiFetch<{ abierta: boolean }>('/api/caja/actual'),
     ])
     setProductos(p.productos.filter((x) => x.activo))
     setPres(pr.presentaciones)
     setTasa(t.tasa ? { valor: Number(t.tasa.valor), es_de_hoy: t.es_de_hoy } : null)
     setResumen(v.resumen)
+    setCajaAbierta(c.abierta)
   }, [])
   useEffect(() => { cargar().catch((e) => setMsg({ tipo: 'error', texto: e.message })) }, [cargar])
 
@@ -73,7 +78,8 @@ function Ventas() {
   }
 
   const total = carrito.reduce((s, l) => s + precioDe(l) * l.cantidad, 0)
-  const reales = medio === 'pix' && tasa?.es_de_hoy ? total / tasa.valor : null
+  const tasaHoy = tasa?.es_de_hoy ? tasa.valor : null
+  const necesitaTasa = medio === 'pix' || (medio === 'efectivo' && pago.moneda === 'BRL')
 
   async function registrarTasa() {
     const v = await dialog.pedir({ title: 'Tasa del Real de hoy', label: 'Pesos por 1 Real (R$)', type: 'number', initial: tasa ? String(tasa.valor) : '', confirmText: 'Guardar' })
@@ -88,16 +94,19 @@ function Ventas() {
     if (!carrito.length || cobrando) return
     setCobrando(true); setMsg(null)
     try {
-      const r = await apiFetch<{ venta: { total: number; valor_reales: number | null }; avisos: string[] }>('/api/ventas', {
+      const r = await apiFetch<{ venta: { total: number; valor_reales: number | null; cambio: number | null; cambio_en: string | null }; avisos: string[] }>('/api/ventas', {
         method: 'POST',
         body: JSON.stringify({
           medio_pago: medio,
           items: carrito.map((l) => ({ producto_id: l.producto.id, presentacion_id: l.pres?.id ?? null, cantidad: l.cantidad })),
+          efectivo: medio === 'efectivo' ? { moneda: pago.moneda, recibido: Number(pago.recibido) || 0, cambio_en: pago.cambioEn } : undefined,
         }),
       })
-      const enReales = r.venta.valor_reales ? ` (R$ ${Number(r.venta.valor_reales).toLocaleString('es-CO')})` : ''
-      setMsg({ tipo: 'ok', texto: `Venta registrada: ${money(r.venta.total)}${enReales}` + (r.avisos.length ? ' · ' + r.avisos.join(' · ') : '') })
-      setCarrito([]); setMedio('efectivo'); setBuscar('')
+      const v = r.venta
+      const enReales = v.valor_reales ? ` (${reales(Number(v.valor_reales))})` : ''
+      const devolver = v.cambio ? ` · Devolver ${v.cambio_en === 'BRL' ? reales(Number(v.cambio)) : money(Number(v.cambio))}` : ''
+      setMsg({ tipo: 'ok', texto: `Venta registrada: ${money(v.total)}${enReales}${devolver}` + (r.avisos.length ? ' · ' + r.avisos.join(' · ') : '') })
+      setCarrito([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setBuscar('')
       cargar()
       buscarRef.current?.focus()
     } catch (e: any) { setMsg({ tipo: 'error', texto: e.message }) } finally { setCobrando(false) }
@@ -140,6 +149,9 @@ function Ventas() {
       </div>
 
       <aside className="carrito">
+        {cajaAbierta === false && (
+          <div className="alert" style={{ marginBottom: 12 }}>La caja está cerrada. <a href="/caja"><b>Abrir caja</b></a> para empezar a vender.</div>
+        )}
         <div className="row-between">
           <h3 className="sub-modal" style={{ margin: 0 }}>Venta actual</h3>
           {carrito.length > 0 && <button className="link-btn" onClick={() => setCarrito([])}>Vaciar</button>}
@@ -163,8 +175,8 @@ function Ventas() {
         </div>
 
         <div className="total-grande">{money(total)}</div>
-        {medio === 'pix' && (tasa?.es_de_hoy
-          ? <div className="muted">≈ <b>R$ {(reales ?? 0).toLocaleString('es-CO', { maximumFractionDigits: 2 })}</b> <span className="faint">(1 R$ = {money(tasa.valor)})</span></div>
+        {medio === 'pix' && (tasaHoy
+          ? <div className="muted">≈ <b>{reales(total / tasaHoy)}</b> <span className="faint">(1 R$ = {money(tasaHoy)})</span></div>
           : <div className="alert" style={{ marginTop: 6 }}>Falta la tasa del Real de hoy.{gestor ? '' : ' Pídele al administrador que la registre.'}</div>
         )}
         {gestor && (
@@ -178,9 +190,9 @@ function Ventas() {
             <button key={m.id} className={'medio' + (medio === m.id ? ' activo' : '')} onClick={() => setMedio(m.id)}>{m.label}</button>
           ))}
         </div>
-        {medio === 'efectivo' && carrito.length > 0 && <CambioEfectivo key={resumen?.cantidad ?? 0} total={total} />}
+        {medio === 'efectivo' && carrito.length > 0 && <CambioEfectivo total={total} tasa={tasaHoy} valor={pago} onChange={setPago} />}
         {msg && <div className={msg.tipo === 'ok' ? 'aviso-ok' : 'alert'} style={{ marginBottom: 10 }}>{msg.texto}</div>}
-        <button className="btn grande" disabled={!carrito.length || cobrando || (medio === 'pix' && !tasa?.es_de_hoy)} onClick={cobrar}>
+        <button className="btn grande" disabled={!carrito.length || cobrando || cajaAbierta === false || (necesitaTasa && !tasaHoy)} onClick={cobrar}>
           {cobrando ? 'Registrando…' : `Cobrar ${money(total)}`}
         </button>
 
