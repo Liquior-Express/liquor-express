@@ -22,7 +22,7 @@ const ETIQUETA: Record<Rol, string> = { cajero: 'Caja', admin: 'Admin', gerencia
 interface ItemNav { key: string; label: string; href?: string; icono: string; roles?: Rol[]; pronto?: boolean }
 const NAV: ItemNav[] = [
   { key: 'inicio', label: 'Inicio', href: '/panel', icono: '🏠' },
-  { key: 'venta', label: 'Punto de venta', icono: '🛒', pronto: true },
+  { key: 'ventas', label: 'Ventas rápidas', href: '/ventas', icono: '⚡' },
   { key: 'inventario', label: 'Inventario', href: '/inventario', icono: '📦', roles: ['admin', 'gerencia'] },
   { key: 'compras', label: 'Compras', icono: '📥', roles: ['admin', 'gerencia'], pronto: true },
   { key: 'caja', label: 'Caja', icono: '💵', pronto: true },
@@ -54,12 +54,24 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
       .finally(() => setCargando(false))
   }, [router])
 
+  // Latido de presencia: mantiene al usuario "en línea" mientras tenga la app abierta.
+  useEffect(() => {
+    if (!me) return
+    const t = setInterval(() => {
+      apiFetch('/api/auth/me').catch((e) => { if (e?.status === 401) { borrarToken(); router.replace('/login') } })
+    }, 60_000)
+    return () => clearInterval(t)
+  }, [me, router])
+
   function toggleTema() {
     const n = tema === 'dark' ? 'light' : 'dark'
     setTema(n); document.documentElement.dataset.theme = n
     try { localStorage.setItem('le_tema', n) } catch {}
   }
-  function salir() { borrarToken(); router.replace('/login') }
+  async function salir() {
+    try { await apiFetch('/api/auth/salir', { method: 'POST' }) } catch {}
+    borrarToken(); router.replace('/login')
+  }
 
   if (cargando) return <div className="auth-wrap"><p className="muted">Cargando…</p></div>
   if (error) return (

@@ -6,7 +6,17 @@ import { AppShell, useSesion, type Rol } from '../../components/AppShell'
 import { useDialog } from '../../components/Dialog'
 
 const ETIQUETA_ROL: Record<Rol, string> = { cajero: 'Caja', admin: 'Admin', gerencia: 'Gerencia' }
-interface Usuario { id: string; usuario: string; nombre: string; rol: Rol; activo: boolean }
+interface Usuario { id: string; usuario: string; nombre: string; rol: Rol; activo: boolean; ultima_actividad: string | null }
+
+// En línea = actividad en los últimos 2,5 min (la app envía un latido cada minuto).
+function presencia(u: Usuario): { online: boolean; texto: string } {
+  if (!u.ultima_actividad) return { online: false, texto: 'desconectado' }
+  const min = (Date.now() - new Date(u.ultima_actividad).getTime()) / 60000
+  if (min < 2.5) return { online: true, texto: 'en línea' }
+  if (min < 60) return { online: false, texto: `hace ${Math.round(min)} min` }
+  if (min < 48 * 60) return { online: false, texto: `hace ${Math.round(min / 60)} h` }
+  return { online: false, texto: new Date(u.ultima_actividad).toLocaleDateString('es-CO') }
+}
 
 export default function PanelPage() {
   return <AppShell active="inicio" titulo="Inicio"><PanelContenido /></AppShell>
@@ -24,7 +34,13 @@ function PanelContenido() {
   const cargarUsuarios = useCallback(async () => {
     try { const r = await apiFetch<{ usuarios: Usuario[] }>('/api/usuarios'); setUsuarios(r.usuarios) } catch {}
   }, [])
-  useEffect(() => { if (gestor) cargarUsuarios() }, [gestor, cargarUsuarios])
+  // Conectados en tiempo real: se refresca cada 15 s.
+  useEffect(() => {
+    if (!gestor) return
+    cargarUsuarios()
+    const t = setInterval(cargarUsuarios, 15_000)
+    return () => clearInterval(t)
+  }, [gestor, cargarUsuarios])
 
   async function crearUsuario(e: React.FormEvent) {
     e.preventDefault(); setMsg(null)
@@ -51,6 +67,8 @@ function PanelContenido() {
     catch (e: any) { setMsg(e.message) }
   }
 
+  const enLinea = usuarios.filter((u) => presencia(u).online).length
+
   return (
     <div className="card" style={{ maxWidth: 620 }}>
       <div className="row-between">
@@ -64,19 +82,29 @@ function PanelContenido() {
       {gestor && (
         <>
           <div style={{ height: 1, background: 'var(--line)', margin: '22px 0' }} />
-          <h3 className="muted" style={{ fontWeight: 600, marginBottom: 12 }}>Usuarios del sistema</h3>
+          <div className="row-between" style={{ marginBottom: 12 }}>
+            <h3 className="muted" style={{ fontWeight: 600 }}>Usuarios del sistema</h3>
+            <span className="faint"><span className="punto-online" /> {enLinea} en línea</span>
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
-            {usuarios.map((u) => (
-              <div key={u.id} className="row-between" style={{ fontSize: 13.5, gap: 8 }}>
-                <span>{u.nombre} <span className="faint">· {u.usuario}</span> {!u.activo && <span className="faint">(inactivo)</span>}</span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span className="faint">{ETIQUETA_ROL[u.rol]}</span>
-                  <button className="link-btn" title="Restablecer contraseña" onClick={() => restablecerClave(u)}>🔑</button>
-                  <button className="link-btn" title={u.activo ? 'Desactivar' : 'Activar'} onClick={() => alternarActivo(u)}>{u.activo ? '⏸' : '▶'}</button>
-                  {u.id !== me.usuario.id && <button className="link-btn" title="Eliminar" onClick={() => eliminar(u)}>✕</button>}
-                </span>
-              </div>
-            ))}
+            {usuarios.map((u) => {
+              const pr = presencia(u)
+              return (
+                <div key={u.id} className="row-between" style={{ fontSize: 13.5, gap: 8 }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className={'punto-online' + (pr.online ? '' : ' off')} title={pr.texto} />
+                    <span>{u.nombre} <span className="faint">· {u.usuario}</span> {!u.activo && <span className="faint">(inactivo)</span>}
+                      <span className="faint" style={{ display: 'block', fontSize: 11 }}>{pr.texto}</span></span>
+                  </span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span className="faint">{ETIQUETA_ROL[u.rol]}</span>
+                    <button className="link-btn" title="Restablecer contraseña" onClick={() => restablecerClave(u)}>🔑</button>
+                    <button className="link-btn" title={u.activo ? 'Desactivar' : 'Activar'} onClick={() => alternarActivo(u)}>{u.activo ? '⏸' : '▶'}</button>
+                    {u.id !== me.usuario.id && <button className="link-btn" title="Eliminar" onClick={() => eliminar(u)}>✕</button>}
+                  </span>
+                </div>
+              )
+            })}
             {usuarios.length === 0 && <span className="faint">Aún no hay más usuarios.</span>}
           </div>
 

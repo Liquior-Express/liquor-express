@@ -1,25 +1,26 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Archivo:wght@400;500;600;700&display=swap');
 
 /* ===== Sistema de diseño Liquor Express ===== */
+/* Colores del estanco: negro + madera/whiskey (estilo Jack Daniel's) */
 :root{
-  --app:#17120d; --panel:#1e1710; --surface:#241c13; --surface-2:#2e2417;
-  --line:rgba(247,232,205,.10); --line-strong:rgba(247,232,205,.18);
-  --amber:#e9a93c; --amber-bright:#f6c25a; --copper:#c9793a;
-  --text:#f4ecdf; --muted:#a99a84; --faint:#7d715f; --teal:#37c2b0;
+  --app:#0c0a08; --panel:#13100d; --surface:#1b1612; --surface-2:#251d17;
+  --line:rgba(236,220,196,.09); --line-strong:rgba(236,220,196,.17);
+  --amber:#b8743a; --amber-bright:#d8994f; --copper:#8a4f24; --on-accent:#170f09;
+  --text:#f2e9dc; --muted:#a8998a; --faint:#77695c; --teal:#4fb3a1;
 }
-/* Tema claro (modo día) */
+/* Tema claro (modo día): crema + madera */
 :root[data-theme="light"]{
-  --app:#f6efe1; --panel:#fffdf9; --surface:#f2e9da; --surface-2:#e9dcc6;
-  --line:rgba(40,28,15,.12); --line-strong:rgba(40,28,15,.20);
-  --amber:#c9791f; --amber-bright:#a85f12; --copper:#b5641f;
-  --text:#2b2117; --muted:#6c5d48; --faint:#9c8c74; --teal:#158b7c;
+  --app:#f5efe6; --panel:#fffcf7; --surface:#efe5d6; --surface-2:#e6d7c2;
+  --line:rgba(35,24,14,.12); --line-strong:rgba(35,24,14,.20);
+  --amber:#8a5427; --amber-bright:#6f4019; --copper:#9a5a2a; --on-accent:#fff8ee;
+  --text:#1d150e; --muted:#645444; --faint:#978672; --teal:#15806f;
 }
 *{ box-sizing:border-box; margin:0; padding:0 }
 html,body{ height:100% }
 body{
   background:
-    radial-gradient(120% 70% at 50% -8%, rgba(233,169,60,.12), transparent 55%),
-    linear-gradient(165deg,#211910,#120d09 72%);
+    radial-gradient(120% 70% at 50% -8%, rgba(184,116,58,.10), transparent 55%),
+    linear-gradient(165deg,#15110d,#080706 72%);
   color:var(--text);
   font-family:'Archivo','Segoe UI',system-ui,sans-serif;
   -webkit-font-smoothing:antialiased;
@@ -27,8 +28,8 @@ body{
 }
 :root[data-theme="light"] body{
   background:
-    radial-gradient(120% 70% at 50% -8%, rgba(201,121,31,.10), transparent 55%),
-    linear-gradient(165deg,#f7f1e6,#efe4d2 72%);
+    radial-gradient(120% 70% at 50% -8%, rgba(138,84,39,.08), transparent 55%),
+    linear-gradient(165deg,#f7f1e8,#ece0cf 72%);
 }
 a{ color:inherit; text-decoration:none }
 
@@ -74,9 +75,51 @@ a{ color:inherit; text-decoration:none }
 .field input, .field select{ background:var(--surface); border:1px solid var(--line-strong); color:var(--text);
   border-radius:11px; padding:12px 14px; font-size:14px; font-family:inherit; outline:none; width:100% }
 .field input:focus, .field select:focus{ border-color:var(--amber); background:var(--surface-2) }
-.btn{ background:linear-gradient(180deg,var(--amber-bright),var(--copper)); color:#20160a; border:none;
+.btn{ background:linear-gradient(180deg,var(--amber-bright),var(--amber)); color:var(--on-accent); border:none;
   border-radius:11px; padding:13px 16px; font-size:14.5px; font-weight:700; font-family:inherit; cursor:pointer;
   margin-top:6px }
+.btn.grande{ width:100%; padding:16px; font-size:17px }
+.aviso-ok{ background:rgba(79,179,161,.14); border:1px solid rgba(79,179,161,.4); color:var(--teal);
+  border-radius:11px; padding:11px 14px; font-size:13px; text-align:center }
+
+/* Presencia (quién está conectado) */
+.punto-online{ display:inline-block; width:8px; height:8px; border-radius:50%; background:#3fbf6f;
+  box-shadow:0 0 0 3px rgba(63,191,111,.2); flex:none }
+.punto-online.off{ background:var(--faint); box-shadow:none }
+
+/* Existencias discriminadas por presentación */
+.desglose{ display:block; font-size:11px; color:var(--faint); margin-top:2px; white-space:nowrap }
+
+/* Ventas rápidas */
+.pos{ display:grid; grid-template-columns:1fr 340px; gap:18px; align-items:start }
+@media (max-width:900px){ .pos{ grid-template-columns:1fr } }
+.pos-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px }
+.pos-card{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px; cursor:pointer;
+  display:flex; flex-direction:column; gap:6px; color:var(--text); user-select:none }
+.pos-card:hover{ border-color:var(--amber) }
+.pos-card:active{ transform:scale(.98) }
+.pos-card img, .pos-card .sinfoto{ width:100%; aspect-ratio:1; object-fit:cover; border-radius:10px; background:var(--surface);
+  display:flex; align-items:center; justify-content:center; font-size:30px }
+.pos-card .nom{ font-size:13px; font-weight:600; line-height:1.25 }
+.pos-card .pre{ font-size:13px; color:var(--amber-bright); font-weight:700 }
+.pos-chips{ display:flex; flex-wrap:wrap; gap:4px }
+.pos-chip{ font-size:10.5px; padding:3px 7px; border-radius:100px; border:1px solid var(--line-strong); background:var(--surface);
+  color:var(--muted); cursor:pointer; font-family:inherit }
+.pos-chip:hover{ color:var(--text); border-color:var(--amber) }
+.carrito{ background:var(--panel); border:1px solid var(--line-strong); border-radius:16px; padding:16px; position:sticky; top:80px }
+.linea{ display:flex; align-items:center; gap:8px; font-size:13px; padding:8px 0; border-bottom:1px solid var(--line) }
+.linea .n{ flex:1; min-width:0 }
+.qty{ display:flex; align-items:center; gap:6px }
+.qty button{ width:28px; height:28px; border-radius:8px; border:1px solid var(--line-strong); background:var(--surface);
+  color:var(--text); cursor:pointer; font-size:15px }
+.total-grande{ font-family:'Fraunces',Georgia,serif; font-size:32px; font-weight:600; color:var(--amber-bright); margin:12px 0 4px }
+.medios{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0 }
+.medio{ padding:11px; border-radius:11px; border:1px solid var(--line-strong); background:var(--surface); color:var(--muted);
+  font-weight:600; cursor:pointer; font-family:inherit; font-size:13px }
+.medio.activo{ border-color:var(--amber); color:var(--text); background:var(--surface-2) }
+.cambio{ margin:0 0 12px }
+.cambio-valor{ margin-top:8px; font-size:15px; color:var(--teal) }
+.cambio-valor b{ font-family:'Fraunces',Georgia,serif; font-size:26px; margin-left:6px }
 .btn:disabled{ opacity:.6; cursor:default }
 .btn.ghost{ background:transparent; border:1px solid var(--line-strong); color:var(--muted); font-weight:600 }
 .alert{ background:rgba(201,121,58,.14); border:1px solid rgba(201,121,58,.4); color:#f0b487;

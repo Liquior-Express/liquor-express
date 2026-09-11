@@ -353,6 +353,10 @@ app.delete('/api/productos/:id/foto', autenticar, requiereRol('admin', 'gerencia
   res.json({ ok: true })
 })
 
+// Mejoras Sprint 1: presencia, borrar producto, costos por origen, tasa del Real y ventas rápidas.
+import { registrarExtras } from './rutas/extras.ts'
+registrarExtras(app, { db, auditar, registrarMovimiento })
+
 // Crea el bucket de fotos si no existe (idempotente).
 async function asegurarBucket() {
   if (!supabase) return

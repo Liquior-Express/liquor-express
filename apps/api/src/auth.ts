@@ -24,7 +24,7 @@ export const firmarToken = (id: string) => jwt.sign({ sub: id }, SECRET, { expir
 export const veUtilidad = (rol: Rol) => rol === 'admin' || rol === 'gerencia'
 
 // Columnas seguras a devolver (nunca el hash de la contraseña).
-export const COLS_USUARIO = 'id, usuario, nombre, rol, activo, creado_en'
+export const COLS_USUARIO = 'id, usuario, nombre, rol, activo, creado_en, ultima_actividad'
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -32,6 +32,16 @@ declare global {
     interface Request { usuario?: Usuario }
   }
 }
+
+// Presencia: registra la última actividad de cada usuario (como máximo cada 30 s).
+const ultimaMarca = new Map<string, number>()
+function marcarActividad(id: string) {
+  const ahora = Date.now()
+  if ((ultimaMarca.get(id) ?? 0) > ahora - 30_000) return
+  ultimaMarca.set(id, ahora)
+  supabase?.from('usuarios').update({ ultima_actividad: new Date(ahora).toISOString() }).eq('id', id).then(() => {}, () => {})
+}
+export function olvidarActividad(id: string) { ultimaMarca.delete(id) }
 
 // Middleware: valida el token de sesión y carga el usuario (rol/activo frescos).
 export async function autenticar(req: Request, res: Response, next: NextFunction) {
@@ -60,6 +70,8 @@ export async function autenticar(req: Request, res: Response, next: NextFunction
   if (!u) return res.status(401).json({ error: 'Usuario no encontrado' })
   if (!u.activo) return res.status(403).json({ error: 'Usuario inactivo' })
 
+  // Al cerrar sesión no se vuelve a marcar como conectado.
+  if (!req.originalUrl.startsWith('/api/auth/salir')) marcarActividad(u.id)
   req.usuario = u as Usuario
   next()
 }

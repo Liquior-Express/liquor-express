@@ -25,12 +25,12 @@ export default function LoginPage() {
     setError(null)
     setCargando(true)
     try {
-      const r = await apiFetch<{ token: string }>('/api/auth/login', {
+      const r = await apiFetch<{ token: string; usuario: { rol: string } }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ usuario, password }),
       })
       guardarToken(r.token)
-      router.push('/panel')
+      router.push(r.usuario?.rol === 'cajero' ? '/ventas' : '/panel')
     } catch (err: any) {
       setError(err.message ?? 'No se pudo ingresar')
     } finally {
