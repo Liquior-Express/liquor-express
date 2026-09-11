@@ -1,7 +1,8 @@
 import type { Express } from 'express'
 import { autenticar, requiereRol, veUtilidad } from '../auth.ts'
+import { hoy, r2, a50, suma, inicioDia, finDia, descontarLotes } from './comun.ts'
 
-// Ventas rápidas + Caja (apertura, entradas/salidas, cierre con cuadre en pesos y en reales).
+// Ventas rápidas, historial/anulación y Caja (apertura, entradas/salidas, cierre en pesos y reales).
 // Terminal único: solo hay una caja abierta a la vez y toda venta pertenece a ella.
 
 interface Deps {
@@ -10,11 +11,9 @@ interface Deps {
   registrarMovimiento: (productoId: string, tipo: 'entrada' | 'venta' | 'merma' | 'ajuste', cantidad: number, usuarioId: string, referencia?: string) => Promise<void>
 }
 
-const hoy = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })
-const r2 = (n: number) => Math.round(n * 100) / 100
-const a50 = (n: number) => Math.round(n / 50) * 50 // pesos: la moneda más pequeña es de $50
 const MEDIOS = ['efectivo', 'nequi', 'bold', 'pix']
-const suma = (arr: any[], f: (x: any) => any) => arr.reduce((a, x) => a + (Number(f(x)) || 0), 0)
+const fechaValida = (s: unknown) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
+const COLS_VENTA = 'id, total, medio_pago, valor_reales, tasa_real, moneda_efectivo, cambio, cambio_en, creado_en'
 
 export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovimiento }: Deps) {
   const gestor = requiereRol('admin', 'gerencia')
@@ -28,10 +27,11 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     return data ? Number(data.valor) : null
   }
 
-  // Resumen de una sesión: ventas por medio y efectivo esperado en pesos y en reales.
+  // Resumen de una sesión: ventas activas por medio y efectivo esperado en pesos y en reales.
   async function resumenSesion(s: any) {
     const [{ data: ventas }, { data: movs }] = await Promise.all([
-      db().from('ventas').select('id, total, utilidad, medio_pago, valor_reales, moneda_efectivo, efectivo_recibido, cambio, cambio_en').eq('sesion_id', s.id),
+      db().from('ventas').select('id, total, utilidad, medio_pago, valor_reales, moneda_efectivo, efectivo_recibido, cambio, cambio_en')
+        .eq('sesion_id', s.id).eq('estado', 'activa'),
       db().from('movimientos_caja').select('id, tipo, concepto, valor, creado_en').eq('sesion_id', s.id).order('creado_en'),
     ])
     const v = ventas ?? []
@@ -146,8 +146,19 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
 
   // ── Ventas rápidas ──
   app.post('/api/ventas', autenticar, async (req, res) => {
-    const items: any[] = Array.isArray(req.body?.items) ? req.body.items : []
-    const medio = req.body?.medio_pago
+    const b = req.body ?? {}
+    // Ventas hechas sin conexión llegan con un id del equipo: si ya se registró, no se duplica.
+    const cliente_id = typeof b.cliente_id === 'string' && b.cliente_id ? b.cliente_id.slice(0, 64) : null
+    const buscarRepetida = async () => {
+      if (!cliente_id) return null
+      const { data } = await db().from('ventas').select(COLS_VENTA).eq('cliente_id', cliente_id).maybeSingle()
+      return data
+    }
+    const repetida = await buscarRepetida()
+    if (repetida) return res.json({ venta: repetida, avisos: [], repetida: true })
+
+    const items: any[] = Array.isArray(b.items) ? b.items : []
+    const medio = b.medio_pago
     if (items.length === 0) return res.status(400).json({ error: 'Agrega al menos un producto' })
     if (!MEDIOS.includes(medio)) return res.status(400).json({ error: 'Medio de pago inválido' })
 
@@ -156,7 +167,7 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
 
     const ids = [...new Set(items.map((i) => String(i.producto_id)))]
     const { data: prods, error: e1 } = await db().from('productos')
-      .select('id, nombre, precio_venta, costo, costos_variables, existencias, es_pola, activo').in('id', ids)
+      .select('id, nombre, precio_venta, costo, costos_variables, existencias, es_pola, activo, controla_vencimiento').in('id', ids)
     if (e1) return res.status(500).json({ error: e1.message })
     const presIds = items.map((i) => i.presentacion_id).filter(Boolean)
     const { data: pres } = presIds.length
@@ -186,7 +197,7 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     let efectivo_recibido: number | null = null
     let cambio: number | null = null
     let cambio_en: string | null = null
-    const enReales = medio === 'pix' || (medio === 'efectivo' && req.body?.efectivo?.moneda === 'BRL')
+    const enReales = medio === 'pix' || (medio === 'efectivo' && b.efectivo?.moneda === 'BRL')
     if (enReales) {
       tasa = await tasaDeHoy()
       if (!tasa) return res.status(400).json({ error: 'Registra primero la tasa del Real de hoy' })
@@ -194,13 +205,13 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     }
     if (medio === 'efectivo') {
       moneda_efectivo = enReales ? 'BRL' : 'COP'
-      const recibido = Number(req.body?.efectivo?.recibido) || 0
+      const recibido = Number(b.efectivo?.recibido) || 0
       if (recibido > 0) {
         const aPagar = enReales ? (valor_reales as number) : total
         if (recibido < aPagar) return res.status(400).json({ error: 'El dinero recibido no alcanza para el total' })
         efectivo_recibido = recibido
         if (enReales) {
-          cambio_en = req.body?.efectivo?.cambio_en === 'COP' ? 'COP' : 'BRL'
+          cambio_en = b.efectivo?.cambio_en === 'COP' ? 'COP' : 'BRL'
           cambio = cambio_en === 'COP' ? a50((recibido - aPagar) * (tasa as number)) : r2(recibido - aPagar)
         } else {
           cambio_en = 'COP'
@@ -208,23 +219,29 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
         }
       }
     }
+    const vendida_en = typeof b.vendida_en === 'string' && !isNaN(Date.parse(b.vendida_en)) ? new Date(b.vendida_en).toISOString() : null
 
     const { data: venta, error: e2 } = await db().from('ventas').insert({
       usuario_id: req.usuario!.id, sesion_id: sesion.id, subtotal: total, utilidad: total - costoTotal, total,
       medio_pago: medio, valor_reales, tasa_real: tasa, moneda_efectivo, efectivo_recibido, cambio, cambio_en,
-    }).select('id, total, medio_pago, valor_reales, tasa_real, moneda_efectivo, cambio, cambio_en, creado_en').single()
-    if (e2) return res.status(500).json({ error: e2.message })
+      cliente_id, vendida_en,
+    }).select(COLS_VENTA).single()
+    if (e2) {
+      // Dos envíos simultáneos de la misma venta sin conexión: devolver la que quedó.
+      if (e2.code === '23505') { const ya = await buscarRepetida(); if (ya) return res.json({ venta: ya, avisos: [], repetida: true }) }
+      return res.status(500).json({ error: e2.message })
+    }
 
     const { error: e3 } = await db().from('venta_items').insert(lineas.map((l) => ({
       venta_id: venta.id, producto_id: l.p.id, presentacion: l.pr ? l.pr.nombre : null, cantidad: l.cantidad,
-      precio_unitario: l.precio_unitario, costo_unitario: l.costo_unitario, es_pola: l.p.es_pola,
+      unidades: l.cantidad * l.factor, precio_unitario: l.precio_unitario, costo_unitario: l.costo_unitario, es_pola: l.p.es_pola,
     })))
     if (e3) {
       await db().from('ventas').delete().eq('id', venta.id)
       return res.status(500).json({ error: e3.message })
     }
 
-    // Descontar existencias (en unidades) y dejar el rastro en el kardex.
+    // Descontar existencias (en unidades), lotes por vencimiento y dejar el rastro en el kardex.
     // (No se bloquea la venta si el stock queda negativo: se avisa para revisar.)
     const porProducto = new Map<string, { p: any; unidades: number }>()
     for (const l of lineas) {
@@ -236,6 +253,7 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     for (const { p, unidades } of porProducto.values()) {
       const nueva = Number(p.existencias) - unidades
       await db().from('productos').update({ existencias: nueva }).eq('id', p.id)
+      if (p.controla_vencimiento) await descontarLotes(db, p.id, unidades)
       await registrarMovimiento(p.id, 'venta', -unidades, req.usuario!.id, `venta ${String(venta.id).slice(0, 8)}`)
       if (nueva < 0) avisos.push(`${p.nombre} quedó en ${nueva} und: revisa el inventario`)
     }
@@ -243,10 +261,9 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
   })
 
   app.get('/api/ventas/hoy', autenticar, async (req, res) => {
-    const desde = `${hoy()}T00:00:00-05:00`
     const { data, error } = await db().from('ventas')
-      .select('id, total, utilidad, medio_pago, valor_reales, creado_en').gte('creado_en', desde)
-      .order('creado_en', { ascending: false })
+      .select('id, total, utilidad, medio_pago, valor_reales, creado_en').eq('estado', 'activa')
+      .gte('creado_en', inicioDia(hoy())).order('creado_en', { ascending: false })
     if (error) return res.status(500).json({ error: error.message })
     const ve = veUtilidad(req.usuario!.rol)
     const lista = data ?? []
@@ -261,5 +278,71 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
         ...(ve ? { utilidad: suma(lista, (v) => v.utilidad) } : {}),
       },
     })
+  })
+
+  // ── Historial de ventas ──
+  app.get('/api/ventas', autenticar, async (req, res) => {
+    const desde = fechaValida(req.query.desde) ? String(req.query.desde) : hoy()
+    const hasta = fechaValida(req.query.hasta) ? String(req.query.hasta) : hoy()
+    let q = db().from('ventas')
+      .select('id, total, utilidad, medio_pago, valor_reales, moneda_efectivo, estado, creado_en, vendida_en, usuario:usuarios!ventas_usuario_id_fkey(nombre)')
+      .gte('creado_en', inicioDia(desde)).lte('creado_en', finDia(hasta))
+      .order('creado_en', { ascending: false }).limit(300)
+    if (MEDIOS.includes(String(req.query.medio))) q = q.eq('medio_pago', req.query.medio)
+    if (req.query.estado === 'activa' || req.query.estado === 'anulada') q = q.eq('estado', req.query.estado)
+    const { data, error } = await q
+    if (error) return res.status(500).json({ error: error.message })
+
+    const ve = veUtilidad(req.usuario!.rol)
+    const lista = (data ?? []).map(({ usuario, utilidad, ...v }: any) => ({ ...v, usuario_nombre: usuario?.nombre ?? null, ...(ve ? { utilidad } : {}) }))
+    const activas = lista.filter((v: any) => v.estado === 'activa')
+    res.json({
+      desde, hasta, ventas: lista,
+      resumen: {
+        cantidad: activas.length, total: suma(activas, (v) => v.total), anuladas: lista.length - activas.length,
+        ...(ve ? { utilidad: suma(activas, (v) => v.utilidad) } : {}),
+      },
+    })
+  })
+
+  app.get('/api/ventas/:id', autenticar, async (req, res) => {
+    const { data: v } = await db().from('ventas').select('*, usuario:usuarios!ventas_usuario_id_fkey(nombre)').eq('id', req.params.id).maybeSingle()
+    if (!v) return res.status(404).json({ error: 'Venta no encontrada' })
+    const [{ data: items }, s] = await Promise.all([
+      db().from('venta_items').select('id, presentacion, cantidad, unidades, precio_unitario, costo_unitario, es_pola, producto:productos(nombre)').eq('venta_id', v.id),
+      cajaAbierta(),
+    ])
+    const ve = veUtilidad(req.usuario!.rol)
+    const { usuario, utilidad, costo_unitario, ...resto } = v
+    res.json({
+      venta: { ...resto, usuario_nombre: usuario?.nombre ?? null, sesion_abierta: !!s && s.id === v.sesion_id, ...(ve ? { utilidad } : {}) },
+      items: (items ?? []).map(({ producto, costo_unitario: cu, ...i }: any) => ({ ...i, producto_nombre: producto?.nombre ?? '', ...(ve ? { costo_unitario: cu } : {}) })),
+    })
+  })
+
+  // Anular: solo ventas de la caja abierta (antes del cierre); devuelve las unidades al inventario.
+  app.post('/api/ventas/:id/anular', autenticar, gestor, async (req, res) => {
+    const motivo = String(req.body?.motivo ?? '').trim()
+    if (!motivo) return res.status(400).json({ error: 'Escribe el motivo de la anulación' })
+    const { data: v } = await db().from('ventas').select('id, estado, sesion_id, total').eq('id', req.params.id).maybeSingle()
+    if (!v) return res.status(404).json({ error: 'Venta no encontrada' })
+    if (v.estado === 'anulada') return res.status(409).json({ error: 'La venta ya está anulada' })
+    const s = await cajaAbierta()
+    if (!s || s.id !== v.sesion_id) return res.status(409).json({ error: 'Solo se pueden anular ventas de la caja abierta (antes del cierre)' })
+
+    const { data: items } = await db().from('venta_items').select('producto_id, cantidad, unidades').eq('venta_id', v.id)
+    const porProducto = new Map<string, number>()
+    for (const i of items ?? []) porProducto.set(i.producto_id, (porProducto.get(i.producto_id) ?? 0) + Number(i.unidades ?? i.cantidad))
+    for (const [productoId, unidades] of porProducto) {
+      const { data: p } = await db().from('productos').select('existencias').eq('id', productoId).maybeSingle()
+      if (!p) continue
+      await db().from('productos').update({ existencias: Number(p.existencias) + unidades }).eq('id', productoId)
+      await registrarMovimiento(productoId, 'ajuste', unidades, req.usuario!.id, `anulación venta ${String(v.id).slice(0, 8)}`)
+    }
+    const { error } = await db().from('ventas')
+      .update({ estado: 'anulada', anulada_por: req.usuario!.id, anulada_en: new Date().toISOString(), motivo_anulacion: motivo }).eq('id', v.id)
+    if (error) return res.status(500).json({ error: error.message })
+    await auditar(req.usuario!.id, 'anular_venta', 'ventas', v.id, { total: v.total, motivo })
+    res.json({ ok: true })
   })
 }

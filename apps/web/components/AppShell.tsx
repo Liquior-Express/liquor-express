@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiFetch, leerToken, borrarToken } from '../lib/api'
+import { leerCola, sincronizarCola } from '../lib/cola'
 
 export type Rol = 'cajero' | 'admin' | 'gerencia'
 export interface Me {
@@ -18,15 +19,20 @@ export const useSesion = (): Me => {
 }
 
 const ETIQUETA: Record<Rol, string> = { cajero: 'Caja', admin: 'Admin', gerencia: 'Gerencia' }
+const ME_KEY = 'le_me' // última sesión conocida (para seguir vendiendo sin conexión)
+const GESTION: Rol[] = ['admin', 'gerencia']
 
 interface ItemNav { key: string; label: string; href?: string; icono: string; roles?: Rol[]; pronto?: boolean }
 const NAV: ItemNav[] = [
   { key: 'inicio', label: 'Inicio', href: '/panel', icono: '🏠' },
   { key: 'ventas', label: 'Ventas rápidas', href: '/ventas', icono: '⚡' },
-  { key: 'inventario', label: 'Inventario', href: '/inventario', icono: '📦', roles: ['admin', 'gerencia'] },
-  { key: 'compras', label: 'Compras', icono: '📥', roles: ['admin', 'gerencia'], pronto: true },
+  { key: 'historial', label: 'Historial de ventas', href: '/historial', icono: '🧾' },
   { key: 'caja', label: 'Caja', href: '/caja', icono: '💵' },
-  { key: 'reportes', label: 'Reportes', icono: '📊', roles: ['admin', 'gerencia'], pronto: true },
+  { key: 'inventario', label: 'Inventario', href: '/inventario', icono: '📦', roles: GESTION },
+  { key: 'compras', label: 'Compras', href: '/compras', icono: '📥', roles: GESTION },
+  { key: 'gastos', label: 'Gastos y caja menor', href: '/gastos', icono: '💸', roles: GESTION },
+  { key: 'flujo', label: 'Flujo de caja', href: '/flujo', icono: '📈', roles: GESTION },
+  { key: 'reportes', label: 'Reportes', icono: '📊', roles: GESTION, pronto: true },
 ]
 
 export function AppShell({ active, titulo, children }: { active: string; titulo: string; children: React.ReactNode }) {
@@ -35,6 +41,8 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
   const [tema, setTema] = useState<'dark' | 'light'>('dark')
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [enLinea, setEnLinea] = useState(true)
+  const [pendientes, setPendientes] = useState(0)
 
   useEffect(() => {
     let t: 'dark' | 'light' = 'dark'
@@ -42,26 +50,60 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
     setTema(t); document.documentElement.dataset.theme = t
   }, [])
 
+  // Service worker (solo en producción): permite abrir la app sin conexión.
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'production' && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
+  }, [])
+
   useEffect(() => {
     if (!leerToken()) { router.replace('/login'); return }
     apiFetch<Me>('/api/auth/me')
-      .then(setMe)
+      .then((m) => { setMe(m); try { localStorage.setItem(ME_KEY, JSON.stringify(m)) } catch {} })
       .catch((e) => {
         // Sesión que ya no sirve (usuario eliminado, token vencido o alterado) → volver al login.
-        if (e?.status === 401 || String(e.message).match(/token|inválida|expirada|autenticado/i)) { borrarToken(); router.replace('/login') }
-        else setError(e.message)
+        if (e?.status === 401 || String(e.message).match(/token|inválida|expirada|autenticado/i)) { borrarToken(); router.replace('/login'); return }
+        // Sin conexión: seguir con la última sesión conocida para poder vender.
+        if (e?.status === 0 || e?.status === 503) {
+          try { const g = localStorage.getItem(ME_KEY); if (g) { setMe(JSON.parse(g)); setEnLinea(false); return } } catch {}
+        }
+        setError(e.message)
       })
       .finally(() => setCargando(false))
   }, [router])
 
-  // Latido de presencia: mantiene al usuario "en línea" mientras tenga la app abierta.
+  // Latido de presencia: mantiene al usuario "en línea" y detecta si volvió la conexión.
   useEffect(() => {
     if (!me) return
     const t = setInterval(() => {
-      apiFetch('/api/auth/me').catch((e) => { if (e?.status === 401) { borrarToken(); router.replace('/login') } })
+      apiFetch('/api/auth/me')
+        .then(() => setEnLinea(true))
+        .catch((e) => {
+          if (e?.status === 401) { borrarToken(); router.replace('/login') }
+          else if (e?.status === 0) setEnLinea(false)
+        })
     }, 60_000)
     return () => clearInterval(t)
   }, [me, router])
+
+  // Ventas guardadas sin conexión: se envían solas al volver la señal.
+  useEffect(() => {
+    if (!me) return
+    const actualizar = () => setPendientes(leerCola().length)
+    const intentar = () => { if (leerCola().length) sincronizarCola().then(actualizar).catch(() => {}) }
+    const alVolver = () => { setEnLinea(true); intentar() }
+    const alCaer = () => setEnLinea(false)
+    actualizar(); intentar()
+    window.addEventListener('le-cola', actualizar)
+    window.addEventListener('online', alVolver)
+    window.addEventListener('offline', alCaer)
+    const t = setInterval(intentar, 30_000)
+    return () => {
+      window.removeEventListener('le-cola', actualizar)
+      window.removeEventListener('online', alVolver)
+      window.removeEventListener('offline', alCaer)
+      clearInterval(t)
+    }
+  }, [me])
 
   function toggleTema() {
     const n = tema === 'dark' ? 'light' : 'dark'
@@ -70,6 +112,7 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
   }
   async function salir() {
     try { await apiFetch('/api/auth/salir', { method: 'POST' }) } catch {}
+    try { localStorage.removeItem(ME_KEY) } catch {}
     borrarToken(); router.replace('/login')
   }
 
@@ -106,6 +149,11 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
           <header className="appbar">
             <div className="titulo">{titulo}</div>
             <div className="der">
+              {!enLinea && <span className="chip-app alerta" title="Las ventas se guardan en el equipo y se envían al volver la señal">Sin conexión</span>}
+              {pendientes > 0 && (
+                <button className="chip-app" title="Ventas guardadas sin conexión — toca para enviarlas ahora"
+                  onClick={() => sincronizarCola().then(() => setPendientes(leerCola().length))}>⏳ {pendientes} por enviar</button>
+              )}
               <button className="tema-btn" onClick={toggleTema} title="Modo día / noche" aria-label="Cambiar tema">
                 {tema === 'dark' ? '☀️' : '🌙'}
               </button>

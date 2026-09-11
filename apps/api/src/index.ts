@@ -186,28 +186,34 @@ function filtrarSegunRol<T extends Record<string, any>>(prod: T, ve: boolean): T
 app.get('/api/productos', autenticar, async (req, res) => {
   const { data, error } = await db()
     .from('productos')
-    .select('*, categoria:categorias(nombre), lotes(fecha_vencimiento)')
+    .select('*, categoria:categorias(nombre), lotes(fecha_vencimiento, cantidad)')
     .order('nombre')
   if (error) return res.status(500).json({ error: error.message })
 
   const ve = veUtilidad(req.usuario!.rol)
   const productos = (data ?? []).map((p: any) => {
     const { categoria, lotes, ...resto } = p
-    const fechas = (lotes ?? []).map((l: any) => l.fecha_vencimiento).filter(Boolean).sort()
+    // Vencimiento más cercano entre los lotes que todavía tienen unidades.
+    const fechas = (lotes ?? []).filter((l: any) => l.fecha_vencimiento && Number(l.cantidad) > 0).map((l: any) => l.fecha_vencimiento).sort()
     return filtrarSegunRol({ ...resto, categoria_nombre: categoria?.nombre ?? null, vence_el: fechas[0] ?? null }, ve)
   })
   res.json({ fuente: 'supabase', productos })
 })
 
-// Registra/actualiza el lote "actual" de un producto con su fecha de vencimiento.
-// (El detalle por factura al recibir mercancía llega con el módulo de Compras.)
+import { descontarLotes } from './rutas/comun.ts'
+
+// Lote "manual" (sin compra) con la fecha puesta desde Inventario: cubre las unidades que
+// no vienen de una compra registrada. Los lotes de las compras no se tocan.
 async function sincronizarLote(productoId: string, fecha: string | null, cantidad?: number, costo?: number) {
   if (!fecha) return
-  const { data: existente } = await db().from('lotes').select('id').eq('producto_id', productoId).limit(1).maybeSingle()
+  const { data: deCompras } = await db().from('lotes').select('cantidad').eq('producto_id', productoId).not('compra_id', 'is', null)
+  const enCompras = (deCompras ?? []).reduce((s: number, l: any) => s + Number(l.cantidad || 0), 0)
+  const cant = Math.max(0, (cantidad ?? 0) - enCompras)
+  const { data: existente } = await db().from('lotes').select('id').eq('producto_id', productoId).is('compra_id', null).limit(1).maybeSingle()
   if (existente) {
-    await db().from('lotes').update({ fecha_vencimiento: fecha, cantidad: cantidad ?? 0, costo_lote: costo ?? null }).eq('id', existente.id)
+    await db().from('lotes').update({ fecha_vencimiento: fecha, cantidad: cant, costo_lote: costo ?? null }).eq('id', existente.id)
   } else {
-    await db().from('lotes').insert({ producto_id: productoId, fecha_vencimiento: fecha, cantidad: cantidad ?? 0, costo_lote: costo ?? null })
+    await db().from('lotes').insert({ producto_id: productoId, fecha_vencimiento: fecha, cantidad: cant, costo_lote: costo ?? null })
   }
 }
 
@@ -323,6 +329,7 @@ app.post('/api/productos/:id/merma', autenticar, requiereRol('admin', 'gerencia'
   await db().from('mermas').insert({ producto_id: id, cantidad, motivo, usuario_id: req.usuario!.id })
   const { error } = await db().from('productos').update({ existencias: nueva }).eq('id', id)
   if (error) return res.status(500).json({ error: error.message })
+  await descontarLotes(db, id, cantidad) // la merma sale del lote que vence primero
   await registrarMovimiento(id, 'merma', -cantidad, req.usuario!.id, motivo)
   await auditar(req.usuario!.id, 'merma', 'productos', id, { cantidad, motivo })
   res.json({ ok: true, existencias: nueva })
@@ -360,6 +367,12 @@ registrarExtras(app, { db, auditar, registrarMovimiento })
 // Sprint 2: ventas rápidas + caja (apertura, entradas/salidas, cierre en pesos y reales).
 import { registrarVentasYCaja } from './rutas/ventas.ts'
 registrarVentasYCaja(app, { db, auditar, registrarMovimiento })
+
+// Sprint 2: compras y proveedores; gastos, caja menor y flujo de caja.
+import { registrarCompras } from './rutas/compras.ts'
+import { registrarGastos } from './rutas/gastos.ts'
+registrarCompras(app, { db, auditar, registrarMovimiento })
+registrarGastos(app, { db, auditar })
 
 // Crea el bucket de fotos si no existe (idempotente).
 async function asegurarBucket() {

@@ -1,0 +1,11 @@
+{
+  "name": "Liquor Express",
+  "short_name": "Liquor Express",
+  "description": "Sistema de administración — Liquor Express",
+  "start_url": "/ventas",
+  "display": "standalone",
+  "background_color": "#0c0a08",
+  "theme_color": "#0c0a08",
+  "lang": "es",
+  "icons": [{ "src": "/icono.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

@@ -5,6 +5,7 @@ import { apiFetch } from '../../lib/api'
 import { AppShell, useSesion } from '../../components/AppShell'
 import { useDialog } from '../../components/Dialog'
 import { CambioEfectivo, PAGO_INICIAL, type PagoEfectivo } from '../../components/CambioEfectivo'
+import { encolarVenta, nuevoId } from '../../lib/cola'
 
 interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null }
 interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; precio: number }
@@ -93,23 +94,35 @@ function Ventas() {
   async function cobrar() {
     if (!carrito.length || cobrando) return
     setCobrando(true); setMsg(null)
+    // Cada venta lleva un id propio: si se reintenta (o se envía después sin conexión) no se duplica.
+    const body = {
+      cliente_id: nuevoId(), vendida_en: new Date().toISOString(), medio_pago: medio,
+      items: carrito.map((l) => ({ producto_id: l.producto.id, presentacion_id: l.pres?.id ?? null, cantidad: l.cantidad })),
+      efectivo: medio === 'efectivo' ? { moneda: pago.moneda, recibido: Number(pago.recibido) || 0, cambio_en: pago.cambioEn } : undefined,
+    }
+    const limpiar = () => { setCarrito([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setBuscar(''); buscarRef.current?.focus() }
     try {
       const r = await apiFetch<{ venta: { total: number; valor_reales: number | null; cambio: number | null; cambio_en: string | null }; avisos: string[] }>('/api/ventas', {
-        method: 'POST',
-        body: JSON.stringify({
-          medio_pago: medio,
-          items: carrito.map((l) => ({ producto_id: l.producto.id, presentacion_id: l.pres?.id ?? null, cantidad: l.cantidad })),
-          efectivo: medio === 'efectivo' ? { moneda: pago.moneda, recibido: Number(pago.recibido) || 0, cambio_en: pago.cambioEn } : undefined,
-        }),
+        method: 'POST', body: JSON.stringify(body),
       })
       const v = r.venta
       const enReales = v.valor_reales ? ` (${reales(Number(v.valor_reales))})` : ''
       const devolver = v.cambio ? ` · Devolver ${v.cambio_en === 'BRL' ? reales(Number(v.cambio)) : money(Number(v.cambio))}` : ''
       setMsg({ tipo: 'ok', texto: `Venta registrada: ${money(v.total)}${enReales}${devolver}` + (r.avisos.length ? ' · ' + r.avisos.join(' · ') : '') })
-      setCarrito([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setBuscar('')
+      limpiar()
       cargar()
-      buscarRef.current?.focus()
-    } catch (e: any) { setMsg({ tipo: 'error', texto: e.message }) } finally { setCobrando(false) }
+    } catch (e: any) {
+      if (e?.status === 0) {
+        // Sin señal: la venta queda guardada en el equipo y se envía sola al volver la conexión.
+        encolarVenta(body)
+        setProductos((ps) => ps.map((p) => {
+          const u = carrito.filter((l) => l.producto.id === p.id).reduce((s, l) => s + l.cantidad * (l.pres ? l.pres.factor_unidades : 1), 0)
+          return u ? { ...p, existencias: p.existencias - u } : p
+        }))
+        setMsg({ tipo: 'ok', texto: `Sin conexión: venta de ${money(total)} guardada en el equipo; se enviará sola al volver la señal.` })
+        limpiar()
+      } else setMsg({ tipo: 'error', texto: e.message })
+    } finally { setCobrando(false) }
   }
 
   // Enter en el buscador agrega el primer resultado (útil con lector de código de barras).

@@ -5,6 +5,7 @@ import { DialogProvider } from '../components/Dialog'
 export const metadata: Metadata = {
   title: 'Liquor Express',
   description: 'Sistema de administración — Liquor Express (JCA Soft)',
+  manifest: '/manifest.json',
 }
 
 export const viewport: Viewport = {
