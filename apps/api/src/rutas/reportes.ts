@@ -1,4 +1,5 @@
 import type { Express } from 'express'
+import PDFDocument from 'pdfkit'
 import { autenticar, requiereRol } from '../auth.ts'
 import { hoy, primerDiaMes, suma } from './comun.ts'
 
@@ -24,6 +25,111 @@ export function registrarReportes(app: Express, { db }: Deps) {
       .sort((a: any, b: any) => Number(b.unidades) - Number(a.unidades)).slice(0, 10)
       .map((p: any) => ({ producto_id: p.producto_id, nombre: p.nombre, unidades: Number(p.unidades) }))
     res.json({ top })
+  })
+
+  // ── Productos por pedir: los que llegaron al mínimo y los que están por llegar ──
+  // "Alcanza para" = días que duran las existencias al ritmo de venta de los últimos 30 días.
+  async function calcularStock() {
+    const [prods, v30] = await Promise.all([
+      db().from('productos').select('id, nombre, existencias, stock_min, unidad_base, categoria:categorias(nombre)').eq('activo', true).order('nombre'),
+      db().rpc('rep_productos', { desde: sumarDias(hoy(), -29), hasta: hoy() }),
+    ])
+    if (prods.error) throw new Error(prods.error.message)
+    if (v30.error) throw new Error(v30.error.message)
+    const vendidas = new Map<string, number>((v30.data ?? []).map((v: any) => [v.producto_id, Number(v.unidades)]))
+    const fila = (p: any) => {
+      const existencias = Number(p.existencias)
+      const stock_min = Number(p.stock_min)
+      const vendidas30 = vendidas.get(p.id) ?? 0
+      const porDia = vendidas30 / 30
+      return {
+        id: p.id, nombre: p.nombre, categoria: p.categoria?.nombre ?? '',
+        unidad: !p.unidad_base || p.unidad_base === 'unidad' ? 'und' : p.unidad_base,
+        existencias, stock_min, faltan: Math.max(0, stock_min - existencias), vendidas30,
+        dias_restantes: porDia > 0 ? Math.floor(existencias / porDia) : null,
+      }
+    }
+    // Solo productos activos con alerta configurada (mínimo mayor que cero).
+    const conMin = (prods.data ?? []).filter((p: any) => Number(p.stock_min) > 0).map(fila)
+    const orden = (a: any, b: any) => (a.existencias - a.stock_min) - (b.existencias - b.stock_min)
+    return {
+      hoy: hoy(),
+      bajos: conMin.filter((p) => p.existencias <= p.stock_min).sort(orden),
+      proximos: conMin.filter((p) => p.existencias > p.stock_min && p.existencias <= p.stock_min * 1.5).sort(orden),
+    }
+  }
+
+  app.get('/api/reportes/stock', autenticar, gestor, async (_req, res) => {
+    try { res.json(await calcularStock()) } catch (e: any) { res.status(500).json({ error: e.message }) }
+  })
+
+  app.get('/api/reportes/stock.pdf', autenticar, gestor, async (_req, res) => {
+    let datos
+    try { datos = await calcularStock() } catch (e: any) { return res.status(500).json({ error: e.message }) }
+
+    const doc = new PDFDocument({ size: 'LETTER', margin: 48, info: { Title: 'Productos por pedir — Liquor Express' } })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="productos-por-pedir-${datos.hoy}.pdf"`)
+    doc.pipe(res)
+
+    const X = 48
+    const ANCHO = 516
+    const COLS = [
+      { t: 'Producto', w: 168 }, { t: 'Categoría', w: 96 }, { t: 'Existencias', w: 62, d: true },
+      { t: 'Mínimo', w: 48, d: true }, { t: 'Faltan', w: 46, d: true }, { t: 'Vend. 30 d', w: 54, d: true }, { t: 'Alcanza', w: 42, d: true },
+    ]
+    const fechaLarga = new Date(datos.hoy + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+
+    doc.fillColor('#111111').font('Helvetica-Bold').fontSize(18).text('Liquor Express', X, 48)
+    doc.font('Helvetica').fontSize(11).fillColor('#555555').text('Productos por pedir · ' + fechaLarga)
+    let y = 100
+
+    const encabezado = (titulo: string, cuantos: number) => {
+      if (y > 640) { doc.addPage(); y = 56 }
+      doc.font('Helvetica-Bold').fontSize(12.5).fillColor('#111111').text(`${titulo} (${cuantos})`, X, y)
+      y += 20
+      doc.font('Helvetica-Bold').fontSize(8).fillColor('#666666')
+      let x = X
+      for (const c of COLS) { doc.text(c.t.toUpperCase(), x, y, { width: c.w - 6, align: c.d ? 'right' : 'left' }); x += c.w }
+      y += 13
+      doc.moveTo(X, y).lineTo(X + ANCHO, y).lineWidth(0.8).strokeColor('#bbbbbb').stroke()
+      y += 7
+    }
+    const linea = (f: any) => {
+      if (y > 720) {
+        doc.addPage(); y = 56
+        doc.font('Helvetica-Bold').fontSize(8).fillColor('#666666')
+        let xx = X
+        for (const c of COLS) { doc.text(c.t.toUpperCase(), xx, y, { width: c.w - 6, align: c.d ? 'right' : 'left' }); xx += c.w }
+        y += 13
+        doc.moveTo(X, y).lineTo(X + ANCHO, y).lineWidth(0.8).strokeColor('#bbbbbb').stroke()
+        y += 7
+      }
+      const celdas = [
+        f.nombre, f.categoria || '—', `${f.existencias} ${f.unidad}`, String(f.stock_min),
+        f.faltan > 0 ? String(f.faltan) : '—', String(f.vendidas30), f.dias_restantes === null ? '—' : `${f.dias_restantes} d`,
+      ]
+      doc.font('Helvetica').fontSize(9.5).fillColor(f.existencias <= 0 ? '#b3261e' : '#111111')
+      let x = X
+      COLS.forEach((c, i) => { doc.text(celdas[i], x, y, { width: c.w - 6, align: c.d ? 'right' : 'left', lineBreak: false, ellipsis: true }); x += c.w })
+      y += 14
+      doc.moveTo(X, y).lineTo(X + ANCHO, y).lineWidth(0.4).strokeColor('#e6e6e6').stroke()
+      y += 5
+    }
+    const vacio = (texto: string) => { doc.font('Helvetica-Oblique').fontSize(10).fillColor('#777777').text(texto, X, y); y += 20 }
+
+    encabezado('Ya llegaron al mínimo', datos.bajos.length)
+    if (datos.bajos.length) datos.bajos.forEach(linea); else vacio('Ninguno. Todo por encima del mínimo.')
+    y += 14
+    encabezado('Próximos a llegar al mínimo', datos.proximos.length)
+    if (datos.proximos.length) datos.proximos.forEach(linea); else vacio('Ninguno por ahora.')
+
+    y += 18
+    doc.font('Helvetica').fontSize(8.5).fillColor('#777777')
+      .text('Se listan los productos activos con alerta de stock configurada (mínimo mayor que cero). "Próximos" son los que están hasta un 50% por encima de su mínimo. "Alcanza" estima los días que duran las existencias al ritmo de venta de los últimos 30 días.', X, y, { width: ANCHO })
+    doc.fontSize(8).fillColor('#999999').text('Generado por el sistema de Liquor Express · JCA Soft', X, 745, { width: ANCHO, align: 'center' })
+
+    doc.end()
   })
 
   app.get('/api/reportes', autenticar, gestor, async (req, res) => {

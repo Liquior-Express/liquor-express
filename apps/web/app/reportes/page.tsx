@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiFetch } from '../../lib/api'
 import { AppShell, useSesion } from '../../components/AppShell'
+import { StockBajo } from '../../components/StockBajo'
 
 interface PuntoSerie { fecha: string; ventas: number; total: number; utilidad: number; gastos: number; ganancia: number }
 interface Reporte {
@@ -213,6 +214,8 @@ function Reportes() {
             </table></div>
             <p className="faint" style={{ marginTop: 6 }}>"Alcanza para": días que dura el inventario actual al ritmo de venta del periodo.</p>
           </div>
+
+          <StockBajo />
 
           <div className="grid-2col seccion-rep">
             <div>
