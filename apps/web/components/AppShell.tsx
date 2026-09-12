@@ -44,12 +44,22 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
   const [error, setError] = useState<string | null>(null)
   const [enLinea, setEnLinea] = useState(true)
   const [pendientes, setPendientes] = useState(0)
+  const [menuAbierto, setMenuAbierto] = useState(false)
 
   useEffect(() => {
     let t: 'dark' | 'light' = 'dark'
     try { t = (localStorage.getItem('le_tema') as any) || 'dark' } catch {}
     setTema(t); document.documentElement.dataset.theme = t
   }, [])
+
+  // Menú plegable (celular/tablet): cerrar con Escape y no dejar que el fondo se desplace.
+  useEffect(() => {
+    if (!menuAbierto) return
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuAbierto(false) }
+    window.addEventListener('keydown', h)
+    document.body.style.overflow = 'hidden'
+    return () => { window.removeEventListener('keydown', h); document.body.style.overflow = '' }
+  }, [menuAbierto])
 
   // Service worker (solo en producción): permite abrir la app sin conexión.
   useEffect(() => {
@@ -132,13 +142,16 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
   return (
     <SesionCtx.Provider value={me}>
       <div className="shell">
-        <aside className="sidebar">
+        {menuAbierto && <div className="velo" onClick={() => setMenuAbierto(false)} />}
+
+        <aside className={'sidebar' + (menuAbierto ? ' abierto' : '')}>
+          <button className="cerrar-menu" aria-label="Cerrar menú" onClick={() => setMenuAbierto(false)}>✕</button>
           <div className="marca">Liquor<b>·</b>Express</div>
           <nav className="menu">
             {items.map((i) => i.pronto ? (
               <div key={i.key} className="item pronto"><span className="ico">{i.icono}</span><span>{i.label}</span><span className="tag">pronto</span></div>
             ) : (
-              <a key={i.key} href={i.href} className={'item' + (active === i.key ? ' activo' : '')}>
+              <a key={i.key} href={i.href} className={'item' + (active === i.key ? ' activo' : '')} onClick={() => setMenuAbierto(false)}>
                 <span className="ico">{i.icono}</span><span>{i.label}</span>
               </a>
             ))}
@@ -148,12 +161,13 @@ export function AppShell({ active, titulo, children }: { active: string; titulo:
 
         <div className="contenido">
           <header className="appbar">
+            <button className="menu-btn" aria-label="Abrir menú" onClick={() => setMenuAbierto(true)}>☰</button>
             <div className="titulo">{titulo}</div>
             <div className="der">
               {!enLinea && <span className="chip-app alerta" title="Las ventas se guardan en el equipo y se envían al volver la señal">Sin conexión</span>}
               {pendientes > 0 && (
                 <button className="chip-app" title="Ventas guardadas sin conexión — toca para enviarlas ahora"
-                  onClick={() => sincronizarCola().then(() => setPendientes(leerCola().length))}>⏳ {pendientes} por enviar</button>
+                  onClick={() => sincronizarCola().then(() => setPendientes(leerCola().length))}>⏳ {pendientes}</button>
               )}
               <button className="tema-btn" onClick={toggleTema} title="Modo día / noche" aria-label="Cambiar tema">
                 {tema === 'dark' ? '☀️' : '🌙'}

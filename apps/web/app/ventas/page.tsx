@@ -41,6 +41,7 @@ function Ventas() {
   const [resumen, setResumen] = useState<Resumen | null>(null)
   const [buscar, setBuscar] = useState('')
   const [carrito, setCarrito] = useState<Linea[]>([])
+  const [carritoAbierto, setCarritoAbierto] = useState(false) // en celular el carrito va plegado abajo
   const [medio, setMedio] = useState<Medio>('efectivo')
   const [pago, setPago] = useState<PagoEfectivo>(PAGO_INICIAL)
   const [cobrando, setCobrando] = useState(false)
@@ -90,6 +91,7 @@ function Ventas() {
   }
 
   const total = carrito.reduce((s, l) => s + precioDe(l) * l.cantidad, 0)
+  const unidades = carrito.reduce((s, l) => s + l.cantidad, 0)
   const tasaHoy = tasa?.es_de_hoy ? tasa.valor : null
   const necesitaTasa = medio === 'pix' || (medio === 'efectivo' && pago.moneda === 'BRL')
 
@@ -111,7 +113,7 @@ function Ventas() {
       items: carrito.map((l) => ({ producto_id: l.producto.id, presentacion_id: l.pres?.id ?? null, cantidad: l.cantidad })),
       efectivo: medio === 'efectivo' ? { moneda: pago.moneda, recibido: Number(pago.recibido) || 0, cambio_en: pago.cambioEn } : undefined,
     }
-    const limpiar = () => { setCarrito([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setBuscar(''); buscarRef.current?.focus() }
+    const limpiar = () => { setCarrito([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setBuscar(''); setCarritoAbierto(false); buscarRef.current?.focus() }
     try {
       const r = await apiFetch<{ venta: { total: number; valor_reales: number | null; cambio: number | null; cambio_en: string | null }; avisos: string[] }>('/api/ventas', {
         method: 'POST', body: JSON.stringify(body),
@@ -183,11 +185,22 @@ function Ventas() {
               </div>
             )
           })}
-          {filtrados.length === 0 && <p className="faint">{productos.length ? 'Sin resultados.' : 'No hay productos activos en el inventario.'}</p>}
+          {filtrados.length === 0 && (
+            cajaAbierta === null
+              ? <p className="faint">Cargando productos…</p>
+              : <p className="faint">{productos.length ? 'Sin resultados.' : 'No hay productos activos en el inventario.'}</p>
+          )}
         </div>
       </div>
 
-      <aside className="carrito">
+      <aside className={'carrito' + (carritoAbierto ? '' : ' plegado')}>
+        {/* En celular: barra fija abajo; al tocarla se despliega el carrito completo */}
+        <button type="button" className="barra-carrito" onClick={() => setCarritoAbierto((v) => !v)}>
+          <span>{unidades ? `${unidades} ítem(s)` : 'Sin productos'}</span>
+          <span className="tot">{money(total)}</span>
+          <span className="ver">{carritoAbierto ? 'Ocultar ▾' : 'Ver ▴'}</span>
+        </button>
+
         {cajaAbierta === false && (
           <div className="alert" style={{ marginBottom: 12 }}>La caja está cerrada. <a href="/caja"><b>Abrir caja</b></a> para empezar a vender.</div>
         )}

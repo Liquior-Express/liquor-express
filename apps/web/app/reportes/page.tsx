@@ -142,7 +142,7 @@ function Reportes() {
         <button className="btn ghost" style={{ marginTop: 0, marginLeft: 'auto' }} onClick={() => window.print()}>🖨 Imprimir</button>
       </div>
       {msg && <div className="alert" style={{ marginBottom: 12 }}>{msg}</div>}
-      <h2 style={{ fontFamily: 'Fraunces,serif', fontWeight: 500, fontSize: 20, marginBottom: 4, textTransform: 'capitalize' }}>{titulo}</h2>
+      <h2 style={{ fontFamily: 'Fraunces,serif', fontWeight: 500, fontSize: 20, marginBottom: 4 }}>{titulo.charAt(0).toUpperCase() + titulo.slice(1)}</h2>
       <p className="faint" style={{ marginBottom: 12 }}>Cada venta cuenta para la jornada de su caja (aunque se cierre después de medianoche).{cargando ? ' · Actualizando…' : ''}</p>
 
       {r && data && (
@@ -205,7 +205,7 @@ function Reportes() {
                     <td>{p.nombre}{p.es_pola && <span className="sello-pola">POLA</span>}</td>
                     <td className="num">{p.unidades.toLocaleString('es-CO')}</td><td className="num">{money(p.total)}</td><td className="num">{money(p.utilidad)}</td>
                     <td className="num">{p.existencias}</td>
-                    <td className="num">{p.dias_inventario === null ? '—' : p.dias_inventario <= 3 ? <span className="dif-mal">⚠ {p.dias_inventario} día(s)</span> : `${p.dias_inventario} días`}</td>
+                    <td className="num">{p.existencias <= 0 ? <span className="dif-mal">Sin stock</span> : p.dias_inventario === null ? '—' : p.dias_inventario <= 3 ? <span className="dif-mal">⚠ {p.dias_inventario} día(s)</span> : `${p.dias_inventario} días`}</td>
                   </tr>
                 ))}
                 {data.mas_vendidos.length === 0 && <tr><td colSpan={6} className="faint" style={{ textAlign: 'center', padding: 16 }}>Sin ventas en el periodo.</td></tr>}

@@ -92,7 +92,22 @@ a{ color:inherit; text-decoration:none }
 
 /* Ventas rápidas */
 .pos{ display:grid; grid-template-columns:1fr 340px; gap:18px; align-items:start }
-@media (max-width:900px){ .pos{ grid-template-columns:1fr } }
+.barra-carrito{ display:none }
+
+/* En celular y tablet el carrito es una barra fija abajo que se despliega */
+@media (max-width:900px){
+  .pos{ grid-template-columns:1fr }
+  .pos > div:first-child{ padding-bottom:92px }
+  .carrito{ position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; border-radius:18px 18px 0 0;
+    border-left:none; border-right:none; border-bottom:none; max-height:86vh; overflow-y:auto;
+    padding:10px 16px calc(16px + env(safe-area-inset-bottom)); box-shadow:0 -10px 30px rgba(0,0,0,.35) }
+  .carrito.plegado{ max-height:none; overflow:visible }
+  .carrito.plegado > *:not(.barra-carrito){ display:none }
+  .barra-carrito{ display:flex; align-items:center; gap:12px; width:100%; background:none; border:none;
+    color:var(--text); font-family:inherit; font-size:14px; cursor:pointer; padding:6px 0 }
+  .barra-carrito .tot{ font-family:'Fraunces',Georgia,serif; font-size:22px; font-weight:600; color:var(--amber-bright) }
+  .barra-carrito .ver{ margin-left:auto; color:var(--muted); font-size:13px }
+}
 .pos-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px }
 .pos-card{ background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px; cursor:pointer;
   display:flex; flex-direction:column; gap:6px; color:var(--text); user-select:none }
@@ -169,6 +184,43 @@ a{ color:inherit; text-decoration:none }
   .shell{ display:block } .area{ padding:0; max-width:none }
   body{ background:#fff !important; color:#000 }
   .tile, .grafica, .tabla-wrap{ break-inside:avoid }
+}
+
+/* ===== Ajustes de celular y tablet =====
+   Van al FINAL del archivo a propósito: así mandan sobre las reglas base de cada sección
+   (si se escriben antes, las reglas base las pisan por orden). */
+
+/* Celular y tablet: el carrito de Ventas pasa a ser una barra fija abajo que se despliega. */
+@media (max-width:900px){
+  .pos{ grid-template-columns:1fr }
+  .pos > div:first-child{ padding-bottom:92px }
+  .carrito{ position:fixed; left:0; right:0; bottom:0; top:auto; z-index:40; margin:0;
+    border-radius:18px 18px 0 0; border-left:none; border-right:none; border-bottom:none;
+    max-height:86vh; overflow-y:auto; padding:10px 16px calc(16px + env(safe-area-inset-bottom));
+    box-shadow:0 -10px 30px rgba(0,0,0,.35) }
+  .carrito.plegado{ max-height:none; overflow:visible }
+  .carrito.plegado > *:not(.barra-carrito){ display:none }
+  .barra-carrito{ display:flex; align-items:center; gap:12px; width:100%; background:none; border:none;
+    color:var(--text); font-family:inherit; font-size:14px; cursor:pointer; padding:6px 0 }
+  .barra-carrito .tot{ font-family:'Fraunces',Georgia,serif; font-size:22px; font-weight:600; color:var(--amber-bright) }
+  .barra-carrito .ver{ margin-left:auto; color:var(--muted); font-size:13px }
+}
+
+/* Celular: todo más compacto. */
+@media (max-width:640px){
+  .tiles{ grid-template-columns:repeat(auto-fill,minmax(142px,1fr)); gap:8px; margin:12px 0 }
+  .tile{ padding:11px } .tile .v{ font-size:19px } .tile .t{ font-size:10px }
+  .grid2, .grid-2col{ grid-template-columns:1fr }
+  .segmento{ grid-template-columns:1fr 1fr !important }
+  .medios{ gap:6px }
+  .pos-grid{ grid-template-columns:repeat(auto-fill,minmax(116px,1fr)); gap:8px }
+  .pos-card{ padding:8px; gap:5px } .pos-card .nom{ font-size:12px } .pos-card .pre{ font-size:12px }
+  .total-grande{ font-size:28px }
+  .seccion-rep h3{ font-size:17px }
+  .celda{ font-size:12.5px }
+  .grafica{ padding:10px 8px 6px }
+  table.tabla{ font-size:12.5px }
+  table.tabla th, table.tabla td{ padding:9px 10px }
 }
 .btn:disabled{ opacity:.6; cursor:default }
 .btn.ghost{ background:transparent; border:1px solid var(--line-strong); color:var(--muted); font-weight:600 }
@@ -259,14 +311,53 @@ td.num, th.num{ text-align:right; font-variant-numeric:tabular-nums }
 .usuario-chip{ display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted) }
 .area{ padding:26px; max-width:1040px; width:100%; margin:0 auto }
 
-@media (max-width:720px){
-  .shell{ flex-direction:column }
-  .sidebar{ width:100%; height:auto; position:static; flex-direction:row; align-items:center; overflow-x:auto; padding:10px 12px; gap:6px }
-  .sidebar .marca{ padding:0 8px 0 4px; font-size:18px; white-space:nowrap }
-  .menu{ flex-direction:row; gap:4px } .sidebar .pie{ display:none }
-  .menu .item.pronto{ display:none } .menu .ico{ font-size:16px }
-  .menu a.item{ padding:8px 10px } .menu a.item span:not(.ico){ display:none }
-  .appbar{ padding:12px 16px } .appbar .usuario-chip span:not(.badge){ display:none }
+/* Botón de menú (hamburguesa) y velo: solo en celular y tablet */
+.menu-btn, .cerrar-menu{ display:none }
+.velo{ position:fixed; inset:0; z-index:55; background:rgba(9,6,3,.55); backdrop-filter:blur(2px) }
+
+/* ===== Celular y tablet: el menú se pliega en un cajón ===== */
+@media (max-width:1024px){
+  .menu-btn{ display:inline-flex; align-items:center; justify-content:center; flex:none;
+    background:var(--surface); border:1px solid var(--line-strong); color:var(--text);
+    width:40px; height:40px; border-radius:11px; cursor:pointer; font-size:18px; line-height:1 }
+  .shell{ display:block }
+  .sidebar{ position:fixed; top:0; left:0; bottom:0; z-index:60; width:270px; max-width:86vw; height:100dvh;
+    transform:translateX(-100%); transition:transform .22s ease; box-shadow:0 0 40px rgba(0,0,0,.45) }
+  .sidebar.abierto{ transform:none }
+  .cerrar-menu{ display:block; position:absolute; top:14px; right:12px; background:none; border:none;
+    color:var(--muted); font-size:18px; cursor:pointer; padding:6px; line-height:1 }
+  .menu a.item, .menu .item{ padding:12px 12px; font-size:15px }
+  .appbar{ padding:12px 16px; gap:10px }
+  .appbar .titulo{ flex:1; min-width:0; font-size:19px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .appbar .usuario-chip span:not(.badge){ display:none }
+  .area{ padding:18px 14px }
+}
+
+/* ===== Celular ===== */
+@media (max-width:640px){
+  .area{ padding:14px 12px }
+  .appbar{ padding:10px 12px; gap:8px }
+  .appbar .titulo{ font-size:17px }
+  .appbar .usuario-chip{ display:none } /* el rol se ve en el menú y en Inicio */
+  .tiles{ grid-template-columns:repeat(auto-fill,minmax(142px,1fr)); gap:8px; margin:12px 0 }
+  .tile{ padding:11px } .tile .v{ font-size:19px } .tile .t{ font-size:10px }
+  table.tabla{ font-size:12.5px }
+  table.tabla th, table.tabla td{ padding:9px 10px }
+  .tabla-wrap{ overscroll-behavior-x:contain }
+  .toolbar{ gap:8px }
+  .toolbar .buscar{ min-width:0; width:100% }
+  .toolbar > .btn{ width:100% }
+  .grid2, .grid-2col{ grid-template-columns:1fr }
+  .segmento{ grid-template-columns:1fr 1fr !important }
+  .medios{ gap:6px }
+  .pos-grid{ grid-template-columns:repeat(auto-fill,minmax(116px,1fr)); gap:8px }
+  .pos-card{ padding:8px; gap:5px } .pos-card .nom{ font-size:12px } .pos-card .pre{ font-size:12px }
+  .card{ padding:22px 18px }
+  .total-grande{ font-size:28px }
+  /* Los modales suben desde abajo, como una hoja */
+  .modal-overlay{ padding:0; align-items:flex-end }
+  .modal-card{ max-width:none !important; max-height:92vh; border-radius:18px 18px 0 0; padding:20px 16px calc(24px + env(safe-area-inset-bottom)) }
+  .seccion-rep h3{ font-size:17px }
 }
 
 /* Miniatura y foto de producto */
