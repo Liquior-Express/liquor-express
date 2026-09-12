@@ -7,6 +7,8 @@ dist/
 **/dist/
 .next/
 **/.next/
+.next-prod/
+**/.next-prod/
 out/
 
 # next

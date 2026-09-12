@@ -32,7 +32,8 @@ const NAV: ItemNav[] = [
   { key: 'compras', label: 'Compras', href: '/compras', icono: '📥', roles: GESTION },
   { key: 'gastos', label: 'Gastos y caja menor', href: '/gastos', icono: '💸', roles: GESTION },
   { key: 'flujo', label: 'Flujo de caja', href: '/flujo', icono: '📈', roles: GESTION },
-  { key: 'reportes', label: 'Reportes', icono: '📊', roles: GESTION, pronto: true },
+  { key: 'reportes', label: 'Reportes', href: '/reportes', icono: '📊', roles: GESTION },
+  { key: 'auditoria', label: 'Bitácora', href: '/auditoria', icono: '🛡️', roles: GESTION },
 ]
 
 export function AppShell({ active, titulo, children }: { active: string; titulo: string; children: React.ReactNode }) {

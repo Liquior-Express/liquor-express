@@ -7,10 +7,11 @@ import { useDialog } from '../../components/Dialog'
 import { CambioEfectivo, PAGO_INICIAL, type PagoEfectivo } from '../../components/CambioEfectivo'
 import { encolarVenta, nuevoId } from '../../lib/cola'
 
-interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null }
+interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null; codigo_barras: string | null }
 interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; precio: number }
 interface Linea { key: string; producto: Producto; pres: Pres | null; cantidad: number }
 interface Resumen { cantidad: number; total: number; por_medio: Record<string, number>; utilidad?: number }
+interface Top { producto_id: string; nombre: string; unidades: number }
 type Medio = 'efectivo' | 'nequi' | 'bold' | 'pix'
 
 const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO')
@@ -34,6 +35,7 @@ function Ventas() {
 
   const [productos, setProductos] = useState<Producto[]>([])
   const [pres, setPres] = useState<Pres[]>([])
+  const [top, setTop] = useState<Top[]>([])
   const [tasa, setTasa] = useState<{ valor: number; es_de_hoy: boolean } | null>(null)
   const [cajaAbierta, setCajaAbierta] = useState<boolean | null>(null)
   const [resumen, setResumen] = useState<Resumen | null>(null)
@@ -45,25 +47,34 @@ function Ventas() {
   const [msg, setMsg] = useState<{ tipo: 'ok' | 'error'; texto: string } | null>(null)
 
   const cargar = useCallback(async () => {
-    const [p, pr, t, v, c] = await Promise.all([
+    const [p, pr, t, v, c, tp] = await Promise.all([
       apiFetch<{ productos: Producto[] }>('/api/productos'),
       apiFetch<{ presentaciones: Pres[] }>('/api/presentaciones'),
       apiFetch<{ tasa: { valor: number } | null; es_de_hoy: boolean }>('/api/tasa'),
       apiFetch<{ resumen: Resumen }>('/api/ventas/hoy'),
       apiFetch<{ abierta: boolean }>('/api/caja/actual'),
+      apiFetch<{ top: Top[] }>('/api/top-ventas').catch(() => ({ top: [] as Top[] })),
     ])
     setProductos(p.productos.filter((x) => x.activo))
     setPres(pr.presentaciones)
     setTasa(t.tasa ? { valor: Number(t.tasa.valor), es_de_hoy: t.es_de_hoy } : null)
     setResumen(v.resumen)
     setCajaAbierta(c.abierta)
+    setTop(tp.top)
   }, [])
   useEffect(() => { cargar().catch((e) => setMsg({ tipo: 'error', texto: e.message })) }, [cargar])
 
   const filtrados = useMemo(() => {
     const q = buscar.trim().toLowerCase()
-    return q ? productos.filter((p) => p.nombre.toLowerCase().includes(q) || (p.categoria_nombre ?? '').toLowerCase().includes(q)) : productos
+    if (!q) return productos
+    return productos.filter((p) => p.nombre.toLowerCase().includes(q) || (p.categoria_nombre ?? '').toLowerCase().includes(q) || (p.codigo_barras ?? '').includes(q))
   }, [productos, buscar])
+
+  // Más vendidos (30 días) que siguen activos, en el orden del top.
+  const topProductos = useMemo(
+    () => top.map((t) => productos.find((p) => p.id === t.producto_id)).filter((p): p is Producto => !!p),
+    [top, productos],
+  )
 
   function agregar(producto: Producto, p: Pres | null) {
     const key = producto.id + ':' + (p?.id ?? 'und')
@@ -125,18 +136,33 @@ function Ventas() {
     } finally { setCobrando(false) }
   }
 
-  // Enter en el buscador agrega el primer resultado (útil con lector de código de barras).
+  // Enter: primero busca el código de barras exacto (lector); si no, agrega el primer resultado.
   function onBuscarKey(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && filtrados[0]) { agregar(filtrados[0], null); setBuscar('') }
+    if (e.key !== 'Enter') return
+    const q = buscar.trim()
+    const porCodigo = q ? productos.find((p) => p.codigo_barras && p.codigo_barras === q) : undefined
+    const elegido = porCodigo ?? filtrados[0]
+    if (elegido) { agregar(elegido, null); setBuscar('') }
+    else if (q) setMsg({ tipo: 'error', texto: `No encontré "${q}"` })
   }
 
   return (
     <div className="pos">
       <div>
         <div className="toolbar" style={{ marginTop: 0 }}>
-          <input ref={buscarRef} autoFocus className="buscar" placeholder="Buscar producto… (Enter agrega el primero)"
+          <input ref={buscarRef} autoFocus className="buscar" placeholder="Buscar o escanear código… (Enter agrega)"
             value={buscar} onChange={(e) => setBuscar(e.target.value)} onKeyDown={onBuscarKey} />
         </div>
+
+        {!buscar && topProductos.length > 0 && (
+          <div className="top-ventas">
+            <span className="faint" style={{ marginRight: 4 }}>🔥 Más vendidos</span>
+            {topProductos.map((p) => (
+              <button key={p.id} type="button" className="pos-chip top" onClick={() => agregar(p, null)}>{p.nombre}<b>{money(p.precio_venta)}</b></button>
+            ))}
+          </div>
+        )}
+
         <div className="pos-grid">
           {filtrados.map((p) => {
             const ps = pres.filter((x) => x.producto_id === p.id && Number(x.factor_unidades) > 1).sort((a, b) => a.factor_unidades - b.factor_unidades)
@@ -184,7 +210,7 @@ function Ventas() {
               <b style={{ minWidth: 72, textAlign: 'right' }}>{money(precioDe(l) * l.cantidad)}</b>
             </div>
           ))}
-          {carrito.length === 0 && <p className="faint" style={{ padding: '10px 0' }}>Toca un producto para agregarlo.</p>}
+          {carrito.length === 0 && <p className="faint" style={{ padding: '10px 0' }}>Toca un producto o escanéalo para agregarlo.</p>}
         </div>
 
         <div className="total-grande">{money(total)}</div>

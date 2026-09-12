@@ -229,6 +229,7 @@ function saneaProducto(body: any) {
   if (body.nombre !== undefined) p.nombre = String(body.nombre).trim()
   if (body.categoria_id !== undefined) p.categoria_id = body.categoria_id || null
   if (body.unidad_base !== undefined) p.unidad_base = String(body.unidad_base).trim() || 'unidad'
+  if (body.codigo_barras !== undefined) p.codigo_barras = String(body.codigo_barras ?? '').trim() || null
   for (const n of ['costo', 'costos_variables', 'margen_pct', 'precio_venta', 'existencias', 'stock_min']) {
     if (body[n] !== undefined && body[n] !== null && body[n] !== '') p[n] = Number(body[n])
   }
@@ -373,6 +374,12 @@ import { registrarCompras } from './rutas/compras.ts'
 import { registrarGastos } from './rutas/gastos.ts'
 registrarCompras(app, { db, auditar, registrarMovimiento })
 registrarGastos(app, { db, auditar })
+
+// Sprint 3: reportes (y top de ventas); importar catálogo, bitácora y respaldo.
+import { registrarReportes } from './rutas/reportes.ts'
+import { registrarAdmin } from './rutas/admin.ts'
+registrarReportes(app, { db })
+registrarAdmin(app, { db, auditar })
 
 // Crea el bucket de fotos si no existe (idempotente).
 async function asegurarBucket() {

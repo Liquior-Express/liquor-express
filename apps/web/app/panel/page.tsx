@@ -79,6 +79,24 @@ function PanelContenido() {
         {me.ve_utilidad ? 'Acceso a utilidad y reportes financieros.' : 'Acceso de caja (sin utilidad).'}
       </p>
 
+      {me.usuario.rol === 'admin' && (
+        <button className="btn ghost" style={{ marginTop: 14 }} onClick={async (e) => {
+          // Respaldo completo de los datos en un archivo (sin contraseñas).
+          const b = e.currentTarget
+          b.disabled = true; b.textContent = 'Preparando respaldo…'
+          try {
+            const r = await fetch('/api/respaldo', { headers: { Authorization: `Bearer ${localStorage.getItem('le_token') ?? ''}` } })
+            if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error ?? 'No se pudo generar el respaldo')
+            const url = URL.createObjectURL(await r.blob())
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `respaldo-liquor-express-${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })}.json`
+            a.click(); URL.revokeObjectURL(url)
+            setMsg('Respaldo descargado. Guárdalo en un lugar seguro (USB o nube).')
+          } catch (err: any) { setMsg(err.message) } finally { b.disabled = false; b.textContent = '⬇ Descargar respaldo de los datos' }
+        }}>⬇ Descargar respaldo de los datos</button>
+      )}
+
       {gestor && (
         <>
           <div style={{ height: 1, background: 'var(--line)', margin: '22px 0' }} />

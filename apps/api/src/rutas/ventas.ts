@@ -72,7 +72,10 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     ])
     res.json({
       abierta: true, tasa,
-      sesion: { id: s.id, apertura: s.apertura, base_apertura: Number(s.base_apertura), base_reales: Number(s.base_reales), abierta_por: u?.nombre ?? null },
+      sesion: {
+        id: s.id, fecha_jornada: s.fecha_jornada, apertura: s.apertura, base_apertura: Number(s.base_apertura),
+        base_reales: Number(s.base_reales), abierta_por: u?.nombre ?? null,
+      },
       resumen: sinUtilidad(r, veUtilidad(req.usuario!.rol)),
     })
   })
@@ -82,8 +85,10 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     const base = Number(req.body?.base) || 0
     const base_reales = Number(req.body?.base_reales) || 0
     if (base < 0 || base_reales < 0) return res.status(400).json({ error: 'La base no puede ser negativa' })
+    // Jornada: el día al que pertenecen las ventas de esta caja (aunque se cierre después de medianoche).
+    const fecha_jornada = fechaValida(req.body?.fecha_jornada) ? req.body.fecha_jornada : hoy()
     const { data, error } = await db().from('sesiones_caja')
-      .insert({ usuario_id: req.usuario!.id, base_apertura: base, base_reales, estado: 'abierta' }).select('id').single()
+      .insert({ usuario_id: req.usuario!.id, base_apertura: base, base_reales, estado: 'abierta', fecha_jornada }).select('id').single()
     if (error) {
       if (error.code === '23505') return res.status(409).json({ error: 'Ya hay una caja abierta' })
       return res.status(500).json({ error: error.message })
@@ -133,13 +138,18 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     await auditar(req.usuario!.id, 'cerrar_caja', 'sesiones_caja', s.id, {
       esperado: r.esperado_efectivo, contado, diferencia: cierre.diferencia, diferencia_reales: cierre.diferencia_reales,
     })
-    res.json({ cierre: { ...cierre, apertura: s.apertura, base_apertura: Number(s.base_apertura), base_reales: Number(s.base_reales), resumen: sinUtilidad(r, veUtilidad(req.usuario!.rol)) } })
+    res.json({ cierre: { ...cierre, fecha_jornada: s.fecha_jornada, apertura: s.apertura, base_apertura: Number(s.base_apertura), base_reales: Number(s.base_reales), resumen: sinUtilidad(r, veUtilidad(req.usuario!.rol)) } })
   })
 
-  app.get('/api/caja/historial', autenticar, gestor, async (_req, res) => {
+  // Historial de cierres, filtrable por fecha de jornada (por defecto, los últimos 30 días).
+  app.get('/api/caja/historial', autenticar, gestor, async (req, res) => {
+    const hasta = fechaValida(req.query.hasta) ? String(req.query.hasta) : hoy()
+    const desde = fechaValida(req.query.desde) ? String(req.query.desde)
+      : new Date(Date.now() - 29 * 864e5).toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })
     const { data, error } = await db().from('sesiones_caja')
-      .select('id, apertura, cierre, base_apertura, total_ventas, total_efectivo, total_nequi, total_bold, total_pix, esperado_caja, contado_efectivo, diferencia, esperado_reales, contado_reales, diferencia_reales, observaciones')
-      .eq('estado', 'cerrada').order('cierre', { ascending: false }).limit(30)
+      .select('id, fecha_jornada, apertura, cierre, base_apertura, total_ventas, total_efectivo, total_nequi, total_bold, total_pix, esperado_caja, contado_efectivo, diferencia, esperado_reales, contado_reales, diferencia_reales, observaciones')
+      .eq('estado', 'cerrada').gte('fecha_jornada', desde).lte('fecha_jornada', hasta)
+      .order('fecha_jornada', { ascending: false }).order('cierre', { ascending: false }).limit(100)
     if (error) return res.status(500).json({ error: error.message })
     res.json({ sesiones: data })
   })

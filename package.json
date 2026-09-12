@@ -1,6 +1,7 @@
 {
   "name": "liquor-express",
   "private": true,
+  "engines": { "node": ">=20" },
   "version": "0.1.0",
   "description": "Sistema de administración Liquor Express — monorepo (web Next.js + api Express) en un solo despliegue. JCA Soft · Kaizen",
   "scripts": {

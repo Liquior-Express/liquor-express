@@ -7,12 +7,13 @@ import { AppShell, useSesion } from '../../components/AppShell'
 import { Modal } from '../../components/Modal'
 import { useDialog } from '../../components/Dialog'
 import { CostosOrigen, type ResumenCosto } from '../../components/CostosOrigen'
-import { desglosar } from '../../lib/conversion'
 import { PresentacionesRapidas } from '../../components/PresentacionesRapidas'
+import { ImportarCatalogo } from '../../components/ImportarCatalogo'
+import { desglosar } from '../../lib/conversion'
 
 interface Categoria { id: string; nombre: string }
 interface Producto {
-  id: string; nombre: string; categoria_id: string | null; categoria_nombre: string | null
+  id: string; nombre: string; categoria_id: string | null; categoria_nombre: string | null; codigo_barras: string | null
   unidad_base: string; costo?: number; costos_variables?: number; margen_pct?: number
   precio_venta: number; existencias: number; stock_min: number; foto_url: string | null
   es_pola: boolean; controla_vencimiento: boolean; vence_el: string | null; activo: boolean
@@ -46,7 +47,7 @@ function comprimirImagen(file: File): Promise<string> {
 }
 
 const vacio = {
-  nombre: '', categoria_id: '', unidad_base: 'unidad',
+  nombre: '', codigo_barras: '', categoria_id: '', unidad_base: 'unidad',
   costo: '', costos_variables: '', margen_pct: '30', precio_venta: '',
   existencias: '0', stock_min: '0', es_pola: false, controla_vencimiento: false, fecha_vencimiento: '',
 }
@@ -67,6 +68,7 @@ function InventarioContenido() {
   const [buscar, setBuscar] = useState('')
   const [cargando, setCargando] = useState(true)
   const [editando, setEditando] = useState<Producto | 'nuevo' | null>(null)
+  const [importando, setImportando] = useState(false)
   const [form, setForm] = useState({ ...vacio })
   const [msg, setMsg] = useState<string | null>(null)
 
@@ -121,7 +123,7 @@ function InventarioContenido() {
   async function abrirEditar(p: Producto) {
     setMsg(null); setNOrigenes(0)
     setForm({
-      nombre: p.nombre, categoria_id: p.categoria_id ?? '', unidad_base: p.unidad_base,
+      nombre: p.nombre, codigo_barras: p.codigo_barras ?? '', categoria_id: p.categoria_id ?? '', unidad_base: p.unidad_base,
       costo: p.costo != null ? String(p.costo) : '', costos_variables: p.costos_variables != null ? String(p.costos_variables) : '',
       margen_pct: p.margen_pct != null ? String(p.margen_pct) : '', precio_venta: String(p.precio_venta),
       existencias: String(p.existencias), stock_min: String(p.stock_min),
@@ -150,7 +152,7 @@ function InventarioContenido() {
   async function guardar(e: React.FormEvent) {
     e.preventDefault(); setMsg(null)
     const cuerpo: any = {
-      nombre: form.nombre, categoria_id: form.categoria_id || null, unidad_base: form.unidad_base,
+      nombre: form.nombre, codigo_barras: form.codigo_barras, categoria_id: form.categoria_id || null, unidad_base: form.unidad_base,
       precio_venta: Number(form.precio_venta) || 0, existencias: Number(form.existencias) || 0,
       stock_min: Number(form.stock_min) || 0, es_pola: form.es_pola, controla_vencimiento: form.controla_vencimiento,
       fecha_vencimiento: form.controla_vencimiento ? (form.fecha_vencimiento || null) : null,
@@ -164,7 +166,9 @@ function InventarioContenido() {
       if (editando === 'nuevo') await apiFetch('/api/productos', { method: 'POST', body: JSON.stringify(cuerpo) })
       else await apiFetch(`/api/productos/${(editando as Producto).id}`, { method: 'PATCH', body: JSON.stringify(cuerpo) })
       setEditando(null); await cargar()
-    } catch (e: any) { setMsg(e.message ?? 'No se pudo guardar') }
+    } catch (e: any) {
+      setMsg(String(e.message).includes('codigo_barras') ? 'Ese código de barras ya está en otro producto.' : (e.message ?? 'No se pudo guardar'))
+    }
   }
   async function alternarActivo(p: Producto) {
     try { await apiFetch(`/api/productos/${p.id}`, { method: 'PATCH', body: JSON.stringify({ activo: !p.activo }) }); await cargar() }
@@ -236,7 +240,7 @@ function InventarioContenido() {
   const presDe = (id: string) => todasPres.filter((x) => x.producto_id === id)
   const filtrados = useMemo(() => {
     const q = buscar.trim().toLowerCase()
-    return productos.filter((p) => !q || p.nombre.toLowerCase().includes(q) || (p.categoria_nombre ?? '').toLowerCase().includes(q))
+    return productos.filter((p) => !q || p.nombre.toLowerCase().includes(q) || (p.categoria_nombre ?? '').toLowerCase().includes(q) || (p.codigo_barras ?? '').includes(q))
   }, [productos, buscar])
 
   if (cargando) return <p className="muted">Cargando inventario…</p>
@@ -246,7 +250,8 @@ function InventarioContenido() {
   return (
     <>
       <div className="toolbar">
-        <input className="buscar" placeholder="Buscar por nombre o categoría…" value={buscar} onChange={(e) => setBuscar(e.target.value)} />
+        <input className="buscar" placeholder="Buscar por nombre, categoría o código…" value={buscar} onChange={(e) => setBuscar(e.target.value)} />
+        <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => setImportando(true)}>⬆ Importar Excel</button>
         <button className="btn" style={{ marginTop: 0 }} onClick={abrirNuevo}>＋ Nuevo producto</button>
       </div>
       {msg && !editando && <div className="alert" style={{ marginBottom: 12 }}>{msg}</div>}
@@ -281,6 +286,7 @@ function InventarioContenido() {
                         {vencido && <span className="chip warn">Vencido</span>}
                         {porVencer && <span className="chip vence">Por vencer</span>}
                         {!p.activo && <span className="faint"> (inactivo)</span>}
+                        {p.codigo_barras && <span className="desglose">▥ {p.codigo_barras}</span>}
                       </span>
                     </span>
                   </td>
@@ -299,7 +305,7 @@ function InventarioContenido() {
             })}
             {filtrados.length === 0 && (
               <tr><td colSpan={ve ? 6 : 4} style={{ textAlign: 'center', color: 'var(--faint)', padding: 24 }}>
-                {productos.length === 0 ? 'Aún no hay productos. Crea el primero.' : 'Sin resultados.'}
+                {productos.length === 0 ? 'Aún no hay productos. Crea el primero o importa el Excel.' : 'Sin resultados.'}
               </td></tr>
             )}
           </tbody>
@@ -307,10 +313,16 @@ function InventarioContenido() {
       </div>
       <p className="faint" style={{ marginTop: 12 }}>{filtrados.length} producto(s){!ve && ' · el costo y la utilidad solo los ve Admin/Gerencia'}</p>
 
+      <ImportarCatalogo open={importando} onClose={() => setImportando(false)} onListo={() => { cargar() }} />
+
       <Modal open={!!editando} title={editando === 'nuevo' ? 'Nuevo producto' : 'Editar producto'} onClose={() => setEditando(null)} ancho={580}>
         <form className="form" style={{ marginTop: 0 }} onSubmit={guardar}>
           <div className="field"><label>Nombre</label>
             <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} required /></div>
+
+          <div className="field"><label>Código de barras (opcional)</label>
+            <input value={form.codigo_barras} placeholder="Escanéalo con el lector o escríbelo" onChange={(e) => setForm({ ...form, codigo_barras: e.target.value })}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() /* el lector envía Enter: no guardar todavía */ }} /></div>
 
           <div className="field"><label>Categoría</label>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -355,7 +367,7 @@ function InventarioContenido() {
           {form.controla_vencimiento && (
             <div className="field"><label>Fecha de vencimiento</label>
               <input type="date" value={form.fecha_vencimiento} onChange={(e) => setForm({ ...form, fecha_vencimiento: e.target.value })} />
-              <div className="sugerido">Cuando llegue más de este producto, la fecha y factura se registran en Compras.</div>
+              <div className="sugerido">Cuando llegue más de este producto, la fecha y la factura se registran en Compras.</div>
             </div>
           )}
 
