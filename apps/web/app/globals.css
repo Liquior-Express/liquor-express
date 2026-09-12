@@ -231,6 +231,12 @@ a{ color:inherit; text-decoration:none }
   border:1px solid var(--line-strong) }
 .row-between{ display:flex; align-items:center; justify-content:space-between; gap:12px }
 .muted{ color:var(--muted); font-size:13px } .faint{ color:var(--faint); font-size:12px }
+/* Fila tocable de una lista (p. ej. la alerta de stock bajo) */
+.fila-alerta{ display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; text-align:left;
+  background:none; border:none; border-bottom:1px solid var(--line); color:var(--text); font-family:inherit;
+  font-size:13.5px; padding:11px 2px; cursor:pointer }
+.fila-alerta:hover{ background:var(--surface) }
+
 .link-btn{ background:transparent; border:none; color:var(--muted); cursor:pointer; font-size:13px;
   padding:2px 4px; border-radius:6px; line-height:1 }
 .link-btn:hover{ background:var(--surface-2); color:var(--text) }

@@ -1,1 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#0c0a08"/><rect x="24" y="24" width="464" height="464" rx="80" fill="none" stroke="#8a4f24" stroke-width="8"/><text x="256" y="320" text-anchor="middle" font-family="Georgia,serif" font-size="200" font-weight="600" fill="#d8994f">LE</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#0c0a08"/>
+  <rect x="16" y="16" width="480" height="480" rx="98" fill="none" stroke="#8a4f24" stroke-width="10"/>
+  <g fill="#eda03a">
+    <rect x="104" y="112" width="56" height="240" rx="12"/>
+    <rect x="104" y="296" width="304" height="56" rx="12"/>
+    <rect x="224" y="112" width="56" height="240" rx="12"/>
+    <rect x="224" y="112" width="184" height="56" rx="12"/>
+    <rect x="224" y="200" width="152" height="48" rx="12"/>
+  </g>
+</svg>

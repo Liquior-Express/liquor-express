@@ -82,6 +82,21 @@ function InventarioContenido() {
   const [nOrigenes, setNOrigenes] = useState(0)
   const editId = editando && editando !== 'nuevo' ? editando.id : null
 
+  // Alerta de stock mínimo: se abre sola al entrar a Inventario (una vez por visita).
+  const [alertaAbierta, setAlertaAbierta] = useState(false)
+  const [avisado, setAvisado] = useState(false)
+  const bajos = useMemo(
+    () => productos
+      .filter((p) => p.activo && Number(p.stock_min) > 0 && Number(p.existencias) <= Number(p.stock_min))
+      .sort((a, b) => (Number(a.existencias) - Number(a.stock_min)) - (Number(b.existencias) - Number(b.stock_min))),
+    [productos],
+  )
+  useEffect(() => {
+    if (cargando || avisado || bajos.length === 0) return
+    setAvisado(true)
+    setAlertaAbierta(true)
+  }, [cargando, avisado, bajos])
+
   // Caja no gestiona inventario.
   useEffect(() => { if (me.usuario.rol === 'cajero') router.replace('/ventas') }, [me, router])
 
@@ -251,9 +266,29 @@ function InventarioContenido() {
     <>
       <div className="toolbar">
         <input className="buscar" placeholder="Buscar por nombre, categoría o código…" value={buscar} onChange={(e) => setBuscar(e.target.value)} />
+        {bajos.length > 0 && (
+          <button className="btn ghost" style={{ marginTop: 0, borderColor: 'rgba(201,121,58,.55)', color: '#f0b487' }} onClick={() => setAlertaAbierta(true)}>
+            ⚠ {bajos.length} con stock bajo
+          </button>
+        )}
         <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => setImportando(true)}>⬆ Importar Excel</button>
         <button className="btn" style={{ marginTop: 0 }} onClick={abrirNuevo}>＋ Nuevo producto</button>
       </div>
+
+      <Modal open={alertaAbierta} title={`⚠ Stock bajo · ${bajos.length} producto(s)`} onClose={() => setAlertaAbierta(false)} ancho={520}>
+        <p className="muted">Llegaron a su nivel mínimo. Toca uno para abrirlo y pedir más.</p>
+        <div style={{ marginTop: 12, maxHeight: 340, overflowY: 'auto' }}>
+          {bajos.map((p) => (
+            <button key={p.id} type="button" className="fila-alerta" onClick={() => { setAlertaAbierta(false); abrirEditar(p) }}>
+              <span>{p.nombre}{p.categoria_nombre && <span className="faint"> · {p.categoria_nombre}</span>}</span>
+              <span className="faint" style={{ whiteSpace: 'nowrap' }}>
+                <b className={Number(p.existencias) <= 0 ? 'dif-mal' : ''}>{p.existencias} {unidadCorta(p.unidad_base)}</b> · mín. {p.stock_min}
+              </span>
+            </button>
+          ))}
+        </div>
+        <button className="btn" style={{ width: '100%', marginTop: 16 }} onClick={() => setAlertaAbierta(false)}>Entendido</button>
+      </Modal>
       {msg && !editando && <div className="alert" style={{ marginBottom: 12 }}>{msg}</div>}
 
       <div className="tabla-wrap">
