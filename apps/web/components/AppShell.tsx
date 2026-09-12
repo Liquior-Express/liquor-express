@@ -24,7 +24,7 @@ const GESTION: Rol[] = ['admin', 'gerencia']
 
 interface ItemNav { key: string; label: string; href?: string; icono: string; roles?: Rol[]; pronto?: boolean }
 const NAV: ItemNav[] = [
-  { key: 'inicio', label: 'Inicio', href: '/panel', icono: '🏠' },
+  { key: 'inicio', label: 'Inicio', href: '/panel', icono: '🏠', roles: GESTION },
   { key: 'ventas', label: 'Ventas rápidas', href: '/ventas', icono: '⚡' },
   { key: 'historial', label: 'Historial de ventas', href: '/historial', icono: '🧾' },
   { key: 'caja', label: 'Caja', href: '/caja', icono: '💵' },

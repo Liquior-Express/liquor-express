@@ -59,6 +59,46 @@ export function registrarReportes(app: Express, { db }: Deps) {
     }
   }
 
+  // ── Resumen para la pantalla de Inicio (un solo viaje) ──
+  app.get('/api/inicio', autenticar, gestor, async (_req, res) => {
+    const h = hoy()
+    const desdeMes = primerDiaMes()
+    try {
+      const [diaHoy, diaMes, gastosMes, stock, lotes, porPagar, cm, sesion, tasa] = await Promise.all([
+        db().rpc('rep_ventas_dia', { desde: h, hasta: h }),
+        db().rpc('rep_ventas_dia', { desde: desdeMes, hasta: h }),
+        db().from('gastos').select('valor').gte('fecha', desdeMes).lte('fecha', h),
+        calcularStock(),
+        db().from('lotes').select('fecha_vencimiento').gt('cantidad', 0).not('fecha_vencimiento', 'is', null).lte('fecha_vencimiento', sumarDias(h, 30)),
+        db().from('compras').select('total').eq('estado_pago', 'pendiente'),
+        db().from('caja_menor').select('saldo').limit(1).maybeSingle(),
+        db().from('sesiones_caja').select('id, fecha_jornada, apertura').eq('estado', 'abierta').maybeSingle(),
+        db().from('tasa_real').select('valor').eq('fecha', h).maybeSingle(),
+      ])
+      const hoyT = suma(diaHoy.data ?? [], (x) => x.total)
+      const mesU = suma(diaMes.data ?? [], (x) => x.utilidad)
+      const mesG = suma(gastosMes.data ?? [], (g) => g.valor)
+      const vencimientos = lotes.data ?? []
+
+      res.json({
+        hoy: { fecha: h, ventas: suma(diaHoy.data ?? [], (x) => x.ventas), total: hoyT, utilidad: suma(diaHoy.data ?? [], (x) => x.utilidad) },
+        mes: { desde: desdeMes, total: suma(diaMes.data ?? [], (x) => x.total), utilidad: mesU, gastos: mesG, ganancia_neta: mesU - mesG },
+        caja: sesion.data
+          ? { abierta: true, fecha_jornada: sesion.data.fecha_jornada, apertura: sesion.data.apertura }
+          : { abierta: false },
+        tasa: tasa.data ? Number(tasa.data.valor) : null,
+        caja_menor: cm.data ? Number(cm.data.saldo) : 0,
+        alertas: {
+          stock_bajo: stock.bajos.length,
+          stock_proximo: stock.proximos.length,
+          vencidos: vencimientos.filter((l: any) => l.fecha_vencimiento < h).length,
+          por_vencer: vencimientos.filter((l: any) => l.fecha_vencimiento >= h).length,
+          por_pagar: { cantidad: (porPagar.data ?? []).length, total: suma(porPagar.data ?? [], (c) => c.total) },
+        },
+      })
+    } catch (e: any) { res.status(500).json({ error: e.message }) }
+  })
+
   app.get('/api/reportes/stock', autenticar, gestor, async (_req, res) => {
     try { res.json(await calcularStock()) } catch (e: any) { res.status(500).json({ error: e.message }) }
   })
