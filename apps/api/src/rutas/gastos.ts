@@ -107,18 +107,19 @@ export function registrarGastos(app: Express, { db, auditar }: Deps) {
   // (Los movimientos de caja creados por compras/gastos/caja menor no se cuentan dos veces.)
   app.get('/api/flujo', autenticar, gestor, async (req, res) => {
     const { desde, hasta } = rango(req.query)
-    const [ventas, movs, compras, gastos, repos] = await Promise.all([
+    const [ventas, movs, compras, gastos, repos, tasasReal] = await Promise.all([
       db().from('ventas').select('total, medio_pago, creado_en, vendida_en').eq('estado', 'activa')
         .gte('creado_en', inicioDia(desde)).lte('creado_en', finDia(hasta)),
-      db().from('movimientos_caja').select('tipo, valor, creado_en').is('referencia', null)
+      db().from('movimientos_caja').select('*').is('referencia', null)
         .gte('creado_en', inicioDia(desde)).lte('creado_en', finDia(hasta)),
       db().from('compras').select('total, pagada_en').eq('estado_pago', 'pagada')
         .gte('pagada_en', inicioDia(desde)).lte('pagada_en', finDia(hasta)),
       db().from('gastos').select('valor, fecha').neq('paga_con', 'caja_menor').gte('fecha', desde).lte('fecha', hasta),
       db().from('movimientos_caja_menor').select('valor, creado_en').eq('tipo', 'reposicion')
         .gte('creado_en', inicioDia(desde)).lte('creado_en', finDia(hasta)),
+      db().from('tasa_real').select('fecha, valor').lte('fecha', hasta).order('fecha'),
     ])
-    for (const r of [ventas, movs, compras, gastos, repos]) if (r.error) return res.status(500).json({ error: r.error.message })
+    for (const r of [ventas, movs, compras, gastos, repos, tasasReal]) if (r.error) return res.status(500).json({ error: r.error.message })
 
     const vacio = (fecha: string) => ({ fecha, ventas: 0, otros_ingresos: 0, compras: 0, gastos: 0, caja_menor: 0, otros_egresos: 0 })
     const mapa = new Map<string, any>()
@@ -132,7 +133,14 @@ export function registrarGastos(app: Express, { db, auditar }: Deps) {
       sumar(diaDe(v.vendida_en ?? v.creado_en), 'ventas', v.total)
       por_medio[v.medio_pago] = (por_medio[v.medio_pago] ?? 0) + Number(v.total)
     }
-    for (const m of movs.data ?? []) sumar(diaDe(m.creado_en), m.tipo === 'ingreso' ? 'otros_ingresos' : 'otros_egresos', m.valor)
+    // Entradas/salidas manuales en reales se pasan a pesos con la tasa de ese día (o la última anterior).
+    const tasas = tasasReal.data ?? []
+    const tasaDelDia = (fecha: string) => Number([...tasas].reverse().find((t: any) => t.fecha <= fecha)?.valor ?? tasas[0]?.valor ?? 0)
+    for (const m of movs.data ?? []) {
+      const fecha = diaDe(m.creado_en)
+      const valor = m.moneda === 'BRL' ? Number(m.valor) * tasaDelDia(fecha) : m.valor
+      sumar(fecha, m.tipo === 'ingreso' ? 'otros_ingresos' : 'otros_egresos', valor)
+    }
     for (const c of compras.data ?? []) sumar(diaDe(c.pagada_en), 'compras', c.total)
     for (const g of gastos.data ?? []) sumar(g.fecha, 'gastos', g.valor)
     for (const r of repos.data ?? []) sumar(diaDe(r.creado_en), 'caja_menor', r.valor)

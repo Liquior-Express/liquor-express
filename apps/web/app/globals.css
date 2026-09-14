@@ -121,18 +121,39 @@ a{ color:inherit; text-decoration:none }
 .pos-chip{ font-size:10.5px; padding:3px 7px; border-radius:100px; border:1px solid var(--line-strong); background:var(--surface);
   color:var(--muted); cursor:pointer; font-family:inherit }
 .pos-chip:hover{ color:var(--text); border-color:var(--amber) }
-.carrito{ background:var(--panel); border:1px solid var(--line-strong); border-radius:16px; padding:16px; position:sticky; top:80px }
+.carrito{ background:var(--panel); border:1px solid var(--line-strong); border-radius:16px; padding:16px; position:sticky; top:80px;
+  max-height:calc(100vh - 96px); overflow-y:auto }
+/* Si el carrito crece más que la pantalla, se desplaza por dentro y el botón Cobrar
+   queda siempre a la vista, pegado abajo: se cobra sin bajar hasta el fondo. */
+.carrito .btn.grande{ position:sticky; bottom:0; z-index:1; box-shadow:0 -14px 14px -2px var(--panel) }
 .linea{ display:flex; align-items:center; gap:8px; font-size:13px; padding:8px 0; border-bottom:1px solid var(--line) }
 .linea .n{ flex:1; min-width:0 }
 .qty{ display:flex; align-items:center; gap:6px }
 .qty button{ width:28px; height:28px; border-radius:8px; border:1px solid var(--line-strong); background:var(--surface);
   color:var(--text); cursor:pointer; font-size:15px }
+/* Cantidad escribible: para pedidos grandes sin tocar + muchas veces. */
+.qty .qty-input{ width:44px; height:28px; padding:0 4px; text-align:center; border-radius:8px; border:1px solid var(--line-strong);
+  background:var(--surface); color:var(--text); font-family:inherit; font-size:14px; font-weight:700 }
+.qty .qty-input:focus{ outline:none; border-color:var(--amber) }
 .total-grande{ font-family:'Fraunces',Georgia,serif; font-size:32px; font-weight:600; color:var(--amber-bright); margin:12px 0 4px }
 .medios{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0 }
 .medio{ padding:11px; border-radius:11px; border:1px solid var(--line-strong); background:var(--surface); color:var(--muted);
   font-weight:600; cursor:pointer; font-family:inherit; font-size:13px }
 .medio.activo{ border-color:var(--amber); color:var(--text); background:var(--surface-2) }
-.cambio{ margin:0 0 12px }
+/* Efectivo: moneda y cambio van en una bandeja hundida con acento verde (el color del
+   dinero en mano), pegada bajo los medios de pago (ámbar). Es un sub-paso de "Efectivo",
+   no otra fila de botones iguales, y casi no suma altura al panel. */
+.cambio{ --bandeja:rgba(0,0,0,.32); --efectivo:var(--teal); --efectivo-suave:rgba(79,179,161,.16);
+  margin:-4px 0 12px; padding:10px 12px 12px; background:var(--bandeja); border:1px solid rgba(79,179,161,.22);
+  border-left:3px solid var(--efectivo); border-radius:4px 12px 12px 12px }
+:root[data-theme="light"] .cambio{ --bandeja:rgba(35,24,14,.06); --efectivo-suave:rgba(21,128,111,.12);
+  border-color:rgba(21,128,111,.28); border-left-color:var(--efectivo) }
+.cambio-titulo{ font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--efectivo); margin-bottom:7px }
+/* La moneda como control segmentado (una sola pastilla), no como tarjetas. */
+.cambio .segmento{ gap:0; padding:3px; border-radius:100px; background:var(--app); border:1px solid var(--line-strong) }
+.cambio .segmento button{ border:none; border-radius:100px; background:transparent; padding:7px 8px; font-size:12.5px }
+.cambio .segmento button.activo{ background:var(--efectivo-suave); color:var(--efectivo); box-shadow:inset 0 0 0 1px var(--efectivo) }
+.cambio .field input{ background:var(--panel) }
 .cambio-valor{ margin-top:8px; font-size:15px; color:var(--teal) }
 .cambio-valor b{ font-family:'Fraunces',Georgia,serif; font-size:26px; margin-left:6px }
 .segmento{ display:grid; grid-template-columns:1fr 1fr; gap:6px }
@@ -167,6 +188,17 @@ a{ color:inherit; text-decoration:none }
 .top-ventas{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:12px }
 .pos-chip.top{ font-size:12px; padding:6px 10px; color:var(--text) }
 .pos-chip.top b{ color:var(--amber-bright); margin-left:4px }
+
+/* Podio de más vendidos: corona, plata y bronce arriba; del cuarto en adelante,
+   el número discreto. Se usa igual en Ventas rápidas y en Reportes. */
+.podio{ display:inline-flex; align-items:center; justify-content:center; margin-right:6px; line-height:1 }
+.podio.p1{ font-size:16px }
+.podio.p2, .podio.p3{ font-size:15px }
+.podio.otro{ font-size:11px; font-weight:600; color:var(--muted); background:var(--surface-2);
+  border:1px solid var(--line); border-radius:999px; padding:1px 6px; min-width:24px }
+/* El que viene arrastrado del mes pasado se ve más apagado: aún no se vende este mes. */
+.pos-chip.top.arrastre{ opacity:.7 }
+.pos-chip.top.arrastre .podio{ filter:grayscale(.5) }
 .seccion-rep{ margin-top:26px }
 .seccion-rep h3{ font-family:'Fraunces',Georgia,serif; font-weight:500; font-size:19px; margin-bottom:10px }
 .cambio-pct{ font-size:12px; margin-top:4px }

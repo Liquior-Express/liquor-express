@@ -29,3 +29,7 @@ skills-lock.json
 .DS_Store
 *.local
 npm-debug.log*
+
+# Registro local de la semilla de demostración (ids de una base concreta)
+apps/api/herramientas/.semilla.json
+apps/api/herramientas/.semilla.json.borrada

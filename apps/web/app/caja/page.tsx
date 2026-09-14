@@ -4,13 +4,12 @@ import { useEffect, useState, useCallback } from 'react'
 import { apiFetch } from '../../lib/api'
 import { AppShell, useSesion } from '../../components/AppShell'
 import { Modal } from '../../components/Modal'
-import { useDialog } from '../../components/Dialog'
 
-interface Movimiento { id: string; tipo: 'ingreso' | 'egreso'; concepto: string; valor: number; creado_en: string }
+interface Movimiento { id: string; tipo: 'ingreso' | 'egreso'; concepto: string; valor: number; moneda?: 'COP' | 'BRL'; creado_en: string }
 interface Resumen {
   ventas: { cantidad: number; total: number; utilidad?: number }
   por_medio: { efectivo: number; efectivo_reales: { pesos: number; reales: number }; nequi: number; bold: number; pix: { pesos: number; reales: number } }
-  ingresos: number; egresos: number; movimientos: Movimiento[]
+  ingresos: number; egresos: number; ingresos_reales?: number; egresos_reales?: number; movimientos: Movimiento[]
   esperado_efectivo: number; esperado_reales: number
 }
 interface Actual {
@@ -43,7 +42,6 @@ export default function CajaPage() {
 
 function Caja() {
   const me = useSesion()
-  const dialog = useDialog()
   const gestor = me.usuario.rol !== 'cajero'
 
   const [actual, setActual] = useState<Actual | null>(null)
@@ -54,6 +52,10 @@ function Caja() {
   const [conteo, setConteo] = useState({ pesos: '', reales: '', obs: '' })
   const [ultimoCierre, setUltimoCierre] = useState<any>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  // Entrada o salida de efectivo en curso (ventana propia: concepto, moneda y valor).
+  const [mov, setMov] = useState<{ tipo: 'ingreso' | 'egreso'; concepto: string; moneda: 'COP' | 'BRL'; valor: string } | null>(null)
+  const [movError, setMovError] = useState<string | null>(null)
+  const [guardandoMov, setGuardandoMov] = useState(false)
 
   const cargar = useCallback(async () => {
     setActual(await apiFetch<Actual>('/api/caja/actual'))
@@ -73,14 +75,22 @@ function Caja() {
     } catch (e: any) { setMsg(e.message) }
   }
 
-  async function movimiento(tipo: 'ingreso' | 'egreso') {
-    const titulo = tipo === 'ingreso' ? 'Entrada de efectivo' : 'Salida de efectivo'
-    const concepto = await dialog.pedir({ title: titulo, label: 'Concepto', placeholder: tipo === 'ingreso' ? 'p. ej. Base adicional' : 'p. ej. Compra de hielo', confirmText: 'Siguiente' })
-    if (!concepto) return
-    const valor = await dialog.pedir({ title: `${titulo} · ${concepto}`, label: 'Valor en pesos', type: 'number', confirmText: 'Registrar' })
-    if (!valor) return
-    try { await apiFetch('/api/caja/movimiento', { method: 'POST', body: JSON.stringify({ tipo, concepto, valor: Number(valor) }) }); await cargar() }
-    catch (e: any) { setMsg(e.message) }
+  function abrirMovimiento(tipo: 'ingreso' | 'egreso') {
+    setMovError(null)
+    setMov({ tipo, concepto: '', moneda: 'COP', valor: '' })
+  }
+  async function registrarMovimiento(e: React.FormEvent) {
+    e.preventDefault()
+    if (!mov) return
+    if (!mov.concepto.trim() || !(Number(mov.valor) > 0)) { setMovError('Escribe el concepto y un valor mayor a cero.'); return }
+    setGuardandoMov(true); setMovError(null)
+    try {
+      await apiFetch('/api/caja/movimiento', {
+        method: 'POST', body: JSON.stringify({ tipo: mov.tipo, concepto: mov.concepto.trim(), moneda: mov.moneda, valor: Number(mov.valor) }),
+      })
+      setMov(null); await cargar()
+    } catch (err: any) { setMovError(err.message) }
+    finally { setGuardandoMov(false) }
   }
 
   async function cerrar(e: React.FormEvent) {
@@ -143,8 +153,8 @@ function Caja() {
               </span>
             </span>
             <span style={{ display: 'flex', gap: 8 }}>
-              <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => movimiento('ingreso')}>＋ Entrada</button>
-              <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => movimiento('egreso')}>− Salida</button>
+              <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => abrirMovimiento('ingreso')}>＋ Entrada</button>
+              <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => abrirMovimiento('egreso')}>− Salida</button>
               <button className="btn" style={{ marginTop: 0 }} onClick={() => { setMsg(null); setCerrando(true) }}>Cerrar caja</button>
             </span>
           </div>
@@ -155,7 +165,7 @@ function Caja() {
             <div className="tile"><div className="t">Efectivo en caja (pesos)</div><div className="v">{money(r.esperado_efectivo)}</div>
               <div className="s">Ventas {money(r.por_medio.efectivo)}{(r.ingresos > 0 || r.egresos > 0) && <> · +{money(r.ingresos)} / −{money(r.egresos)}</>}</div></div>
             <div className="tile"><div className="t">Reales en caja</div><div className="v">{reales(r.esperado_reales)}</div>
-              <div className="s">Ventas en reales {money(r.por_medio.efectivo_reales.pesos)}</div></div>
+              <div className="s">Ventas en reales {money(r.por_medio.efectivo_reales.pesos)}{((r.ingresos_reales ?? 0) > 0 || (r.egresos_reales ?? 0) > 0) && <> · +{reales(r.ingresos_reales ?? 0)} / −{reales(r.egresos_reales ?? 0)}</>}</div></div>
             <div className="tile"><div className="t">Nequi</div><div className="v">{money(r.por_medio.nequi)}</div></div>
             <div className="tile"><div className="t">Bold</div><div className="v">{money(r.por_medio.bold)}</div></div>
             <div className="tile"><div className="t">PIX</div><div className="v">{money(r.por_medio.pix.pesos)}</div><div className="s">{reales(r.por_medio.pix.reales)}</div></div>
@@ -167,13 +177,48 @@ function Caja() {
               {r.movimientos.map((m) => (
                 <div key={m.id} className="row-between" style={{ fontSize: 13, padding: '4px 0' }}>
                   <span>{m.concepto} <span className="faint">· {fechaHora(m.creado_en)}</span></span>
-                  <b style={{ color: m.tipo === 'ingreso' ? 'var(--teal)' : 'var(--copper)' }}>{m.tipo === 'ingreso' ? '+' : '−'}{money(m.valor)}</b>
+                  <b style={{ color: m.tipo === 'ingreso' ? 'var(--teal)' : 'var(--copper)' }}>{m.tipo === 'ingreso' ? '+' : '−'}{m.moneda === 'BRL' ? reales(m.valor) : money(m.valor)}</b>
                 </div>
               ))}
             </div>
           )}
         </>
       )}
+
+      <Modal open={!!mov} title={mov?.tipo === 'ingreso' ? 'Entrada de efectivo' : 'Salida de efectivo'} onClose={() => setMov(null)}>
+        {mov && (
+          <form className="form" style={{ marginTop: 0 }} onSubmit={registrarMovimiento}>
+            <div className="field"><label>Concepto</label>
+              <input autoFocus value={mov.concepto} onChange={(e) => setMov({ ...mov, concepto: e.target.value })}
+                placeholder={mov.tipo === 'ingreso' ? 'p. ej. Base adicional' : 'p. ej. Retiro de los socios'} /></div>
+            {/* Una salida no es un gasto: no baja la ganancia neta. Los gastos del negocio van en Gastos. */}
+            {mov.tipo === 'egreso' && (
+              <p className="faint" style={{ marginTop: -4, lineHeight: 1.45 }}>
+                ¿Es un gasto del negocio (hielo, bolsas, flete)? No va aquí:{' '}
+                {gestor
+                  ? <>regístralo en <a href="/gastos"><b>Gastos y caja menor</b></a> para que cuente en la ganancia.</>
+                  : 'pídele al Admin que lo registre como gasto.'}
+              </p>
+            )}
+            <div className="field"><label>Moneda</label>
+              <div className="segmento">
+                <button type="button" className={mov.moneda === 'COP' ? 'activo' : ''} onClick={() => setMov({ ...mov, moneda: 'COP' })}>Pesos</button>
+                <button type="button" className={mov.moneda === 'BRL' ? 'activo' : ''} onClick={() => setMov({ ...mov, moneda: 'BRL' })}>Reales</button>
+              </div></div>
+            <div className="field"><label>{mov.moneda === 'BRL' ? 'Valor en reales (R$)' : 'Valor en pesos'}</label>
+              <input type="number" inputMode="decimal" min="0" step={mov.moneda === 'BRL' ? '0.01' : '1'} value={mov.valor}
+                onChange={(e) => setMov({ ...mov, valor: e.target.value })} placeholder="0" /></div>
+            {mov.moneda === 'BRL' && actual?.tasa && Number(mov.valor) > 0 && (
+              <p className="faint" style={{ marginTop: -4 }}>≈ {money(Number(mov.valor) * actual.tasa)} con la tasa de hoy · se cuadra aparte, en el cajón de reales</p>
+            )}
+            {movError && <div className="alert">{movError}</div>}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button type="button" className="btn ghost" style={{ flex: 1, marginTop: 0 }} onClick={() => setMov(null)}>Cancelar</button>
+              <button type="submit" className="btn" style={{ flex: 1, marginTop: 0 }} disabled={guardandoMov}>{guardandoMov ? 'Registrando…' : 'Registrar'}</button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       {gestor && (
         <>

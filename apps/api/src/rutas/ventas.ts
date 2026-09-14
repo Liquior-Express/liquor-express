@@ -32,15 +32,20 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     const [{ data: ventas }, { data: movs }] = await Promise.all([
       db().from('ventas').select('id, total, utilidad, medio_pago, valor_reales, moneda_efectivo, efectivo_recibido, cambio, cambio_en')
         .eq('sesion_id', s.id).eq('estado', 'activa'),
-      db().from('movimientos_caja').select('id, tipo, concepto, valor, creado_en').eq('sesion_id', s.id).order('creado_en'),
+      db().from('movimientos_caja').select('*').eq('sesion_id', s.id).order('creado_en'),
     ])
     const v = ventas ?? []
     const m = movs ?? []
     const efCop = v.filter((x: any) => x.medio_pago === 'efectivo' && x.moneda_efectivo !== 'BRL')
     const efBrl = v.filter((x: any) => x.medio_pago === 'efectivo' && x.moneda_efectivo === 'BRL')
     const pix = v.filter((x: any) => x.medio_pago === 'pix')
-    const ingresos = suma(m.filter((x: any) => x.tipo === 'ingreso'), (x) => x.valor)
-    const egresos = suma(m.filter((x: any) => x.tipo === 'egreso'), (x) => x.valor)
+    // Entradas y salidas manuales: cada una va a su propio cajón (pesos o reales).
+    const enPesos = m.filter((x: any) => x.moneda !== 'BRL')
+    const enReales = m.filter((x: any) => x.moneda === 'BRL')
+    const ingresos = suma(enPesos.filter((x: any) => x.tipo === 'ingreso'), (x) => x.valor)
+    const egresos = suma(enPesos.filter((x: any) => x.tipo === 'egreso'), (x) => x.valor)
+    const ingresosReales = r2(suma(enReales.filter((x: any) => x.tipo === 'ingreso'), (x) => x.valor))
+    const egresosReales = r2(suma(enReales.filter((x: any) => x.tipo === 'egreso'), (x) => x.valor))
     // Pago en reales con cambio en pesos: entran los reales recibidos y salen pesos del cajón.
     const cambioPesosDeReales = suma(efBrl.filter((x: any) => x.cambio_en === 'COP'), (x) => x.cambio)
     const realesQueEntraron = suma(efBrl, (x) => (x.cambio_en === 'COP' && x.efectivo_recibido ? x.efectivo_recibido : x.valor_reales))
@@ -54,9 +59,9 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
         bold: suma(v.filter((x: any) => x.medio_pago === 'bold'), (x) => x.total),
         pix: { pesos: suma(pix, (x) => x.total), reales: r2(suma(pix, (x) => x.valor_reales)) },
       },
-      ingresos, egresos, movimientos: m,
+      ingresos, egresos, ingresos_reales: ingresosReales, egresos_reales: egresosReales, movimientos: m,
       esperado_efectivo: Math.round(Number(s.base_apertura) + suma(efCop, (x) => x.total) - cambioPesosDeReales + ingresos - egresos),
-      esperado_reales: r2(Number(s.base_reales) + realesQueEntraron),
+      esperado_reales: r2(Number(s.base_reales) + realesQueEntraron + ingresosReales - egresosReales),
     }
   }
   const sinUtilidad = (r: any, ve: boolean) => (ve ? r : { ...r, ventas: { cantidad: r.ventas.cantidad, total: r.ventas.total } })
@@ -101,14 +106,22 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     const s = await cajaAbierta()
     if (!s) return res.status(409).json({ error: 'La caja está cerrada' })
     const tipo = req.body?.tipo
-    const valor = Number(req.body?.valor)
+    const moneda = req.body?.moneda === 'BRL' ? 'BRL' : 'COP'
+    const valor = r2(Number(req.body?.valor))
     const concepto = String(req.body?.concepto ?? '').trim()
     if (!['ingreso', 'egreso'].includes(tipo) || !(valor > 0) || !concepto) {
       return res.status(400).json({ error: 'Tipo, concepto y valor son obligatorios' })
     }
-    const { error } = await db().from('movimientos_caja').insert({ sesion_id: s.id, tipo, concepto, valor, usuario_id: req.usuario!.id })
-    if (error) return res.status(500).json({ error: error.message })
-    await auditar(req.usuario!.id, 'movimiento_caja', 'sesiones_caja', s.id, { tipo, concepto, valor })
+    // Pesos es el valor por defecto de la columna; la moneda solo se envía cuando es en reales.
+    const { error } = await db().from('movimientos_caja')
+      .insert({ sesion_id: s.id, tipo, concepto, valor, usuario_id: req.usuario!.id, ...(moneda === 'BRL' ? { moneda } : {}) })
+    if (error) {
+      if (moneda === 'BRL' && /moneda/i.test(error.message)) {
+        return res.status(409).json({ error: 'Para registrar en reales falta aplicar la actualización 0011 de la base de datos.' })
+      }
+      return res.status(500).json({ error: error.message })
+    }
+    await auditar(req.usuario!.id, 'movimiento_caja', 'sesiones_caja', s.id, { tipo, concepto, valor, moneda })
     res.status(201).json({ ok: true })
   })
 

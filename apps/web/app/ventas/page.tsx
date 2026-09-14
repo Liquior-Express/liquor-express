@@ -6,12 +6,13 @@ import { AppShell, useSesion } from '../../components/AppShell'
 import { useDialog } from '../../components/Dialog'
 import { CambioEfectivo, PAGO_INICIAL, type PagoEfectivo } from '../../components/CambioEfectivo'
 import { encolarVenta, nuevoId } from '../../lib/cola'
+import { Posicion } from '../../components/Posicion'
 
 interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null; codigo_barras: string | null }
 interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; precio: number }
 interface Linea { key: string; producto: Producto; pres: Pres | null; cantidad: number }
 interface Resumen { cantidad: number; total: number; por_medio: Record<string, number>; utilidad?: number }
-interface Top { producto_id: string; nombre: string; unidades: number }
+interface Top { producto_id: string; nombre: string; veces: number; posicion: number; arrastre: boolean }
 type Medio = 'efectivo' | 'nequi' | 'bold' | 'pix'
 
 const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO')
@@ -71,9 +72,13 @@ function Ventas() {
     return productos.filter((p) => p.nombre.toLowerCase().includes(q) || (p.categoria_nombre ?? '').toLowerCase().includes(q) || (p.codigo_barras ?? '').includes(q))
   }, [productos, buscar])
 
-  // Más vendidos (30 días) que siguen activos, en el orden del top.
+  // Más vendidos del mes que siguen activos, en el orden del podio. Si alguno
+  // quedó inactivo se renumera, para que no queden huecos en los puestos.
   const topProductos = useMemo(
-    () => top.map((t) => productos.find((p) => p.id === t.producto_id)).filter((p): p is Producto => !!p),
+    () => top
+      .map((t) => ({ t, p: productos.find((x) => x.id === t.producto_id) }))
+      .filter((x): x is { t: Top; p: Producto } => !!x.p)
+      .map((x, i) => ({ ...x, puesto: i + 1 })),
     [top, productos],
   )
 
@@ -88,6 +93,9 @@ function Ventas() {
   }
   function cambiarCantidad(key: string, delta: number) {
     setCarrito((c) => c.map((l) => (l.key === key ? { ...l, cantidad: l.cantidad + delta } : l)).filter((l) => l.cantidad > 0))
+  }
+  function fijarCantidad(key: string, cantidad: number) {
+    setCarrito((c) => c.map((l) => (l.key === key ? { ...l, cantidad } : l)))
   }
 
   const total = carrito.reduce((s, l) => s + precioDe(l) * l.cantidad, 0)
@@ -158,9 +166,13 @@ function Ventas() {
 
         {!buscar && topProductos.length > 0 && (
           <div className="top-ventas">
-            <span className="faint" style={{ marginRight: 4 }}>🔥 Más vendidos</span>
-            {topProductos.map((p) => (
-              <button key={p.id} type="button" className="pos-chip top" onClick={() => agregar(p, null)}>{p.nombre}<b>{money(p.precio_venta)}</b></button>
+            <span className="faint" style={{ marginRight: 4 }}>🔥 Más vendidos del mes</span>
+            {topProductos.map(({ t, p, puesto }) => (
+              <button key={p.id} type="button" className={'pos-chip top' + (t.arrastre ? ' arrastre' : '')}
+                title={t.arrastre ? 'Venía en el podio del mes pasado; aún no se vende este mes' : `${t.veces} venta(s) este mes`}
+                onClick={() => agregar(p, null)}>
+                <Posicion n={puesto} />{p.nombre}<b>{money(p.precio_venta)}</b>
+              </button>
             ))}
           </div>
         )}
@@ -217,7 +229,7 @@ function Ventas() {
               </span>
               <span className="qty">
                 <button onClick={() => cambiarCantidad(l.key, -1)}>−</button>
-                <b>{l.cantidad}</b>
+                <Cantidad valor={l.cantidad} onCambiar={(n) => fijarCantidad(l.key, n)} />
                 <button onClick={() => cambiarCantidad(l.key, 1)}>+</button>
               </span>
               <b style={{ minWidth: 72, textAlign: 'right' }}>{money(precioDe(l) * l.cantidad)}</b>
@@ -257,5 +269,23 @@ function Ventas() {
         )}
       </aside>
     </div>
+  )
+}
+
+// Cantidad en el carrito: − / + para lo de siempre, y escribible para pedidos
+// grandes (10, 24, 30…) sin tocar el botón muchas veces.
+function Cantidad({ valor, onCambiar }: { valor: number; onCambiar: (n: number) => void }) {
+  const [texto, setTexto] = useState(String(valor))
+  useEffect(() => { setTexto(String(valor)) }, [valor])
+  return (
+    <input className="qty-input" type="text" inputMode="numeric" aria-label="Cantidad" value={texto}
+      onFocus={(e) => e.target.select()}
+      onChange={(e) => {
+        const limpio = e.target.value.replace(/\D/g, '').slice(0, 4)
+        setTexto(limpio)
+        if (Number(limpio) > 0) onCambiar(Number(limpio))
+      }}
+      onBlur={() => setTexto(String(valor))}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
   )
 }

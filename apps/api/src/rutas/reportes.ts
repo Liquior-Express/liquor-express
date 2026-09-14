@@ -17,14 +17,60 @@ const crecimiento = (actual: number, antes: number) => (antes ? Math.round(((act
 export function registrarReportes(app: Express, { db }: Deps) {
   const gestor = requiereRol('admin', 'gerencia')
 
-  // Top 10 más vendidos de los últimos 30 días (atajos en Ventas rápidas; sin costos).
+  // Ranking por VECES VENDIDO (cuántas ventas distintas llevaron el producto), no por
+  // unidades: una cajetilla son 20 cigarrillos pero es una sola venta, y lo que sirve
+  // para la agilidad del mostrador es lo que más se pide. Cuenta por jornada de caja.
+  async function rankingVeces(desde: string, hasta: string) {
+    const { data: ses, error } = await db().from('sesiones_caja').select('id').gte('fecha_jornada', desde).lte('fecha_jornada', hasta)
+    if (error) throw new Error(error.message)
+    const sesiones = (ses ?? []).map((s: any) => s.id)
+    if (!sesiones.length) return []
+
+    const porProducto = new Map<string, { nombre: string; ventas: Set<string>; unidades: number }>()
+    const LOTE = 1000
+    for (let desdeFila = 0; ; desdeFila += LOTE) {
+      const { data, error: e } = await db().from('venta_items')
+        .select('id, producto_id, venta_id, cantidad, unidades, productos(nombre), ventas!inner(estado, sesion_id)')
+        .eq('ventas.estado', 'activa').in('ventas.sesion_id', sesiones)
+        .order('id').range(desdeFila, desdeFila + LOTE - 1)
+      if (e) throw new Error(e.message)
+      for (const it of data ?? []) {
+        const p = porProducto.get(it.producto_id) ?? { nombre: it.productos?.nombre ?? '', ventas: new Set<string>(), unidades: 0 }
+        p.ventas.add(it.venta_id)
+        p.unidades += Number(it.unidades ?? it.cantidad) || 0
+        porProducto.set(it.producto_id, p)
+      }
+      if (!data || data.length < LOTE) break
+    }
+    // Empate en veces: gana el que movió más unidades (mismo criterio que el reporte).
+    return [...porProducto]
+      .map(([producto_id, p]) => ({ producto_id, nombre: p.nombre, veces: p.ventas.size, unidades: p.unidades }))
+      .sort((a, b) => b.veces - a.veces || b.unidades - a.unidades || a.nombre.localeCompare(b.nombre, 'es'))
+  }
+
+  // Top 10 del MES en curso (atajos en Ventas rápidas; sin costos). Al empezar un mes
+  // el tablero no queda vacío: arranca con el podio del mes pasado y se va reacomodando
+  // solo a medida que se vende.
   app.get('/api/top-ventas', autenticar, async (_req, res) => {
-    const { data, error } = await db().rpc('rep_productos', { desde: sumarDias(hoy(), -29), hasta: hoy() })
-    if (error) return res.status(500).json({ error: error.message })
-    const top = (data ?? [])
-      .sort((a: any, b: any) => Number(b.unidades) - Number(a.unidades)).slice(0, 10)
-      .map((p: any) => ({ producto_id: p.producto_id, nombre: p.nombre, unidades: Number(p.unidades) }))
-    res.json({ top })
+    const desdeMes = primerDiaMes()
+    const finAnterior = sumarDias(desdeMes, -1)
+    const desdeAnterior = finAnterior.slice(0, 8) + '01'
+    try {
+      const [mes, anterior] = await Promise.all([rankingVeces(desdeMes, hoy()), rankingVeces(desdeAnterior, finAnterior)])
+      const top: any[] = []
+      const yaEsta = new Set<string>()
+      const agregar = (p: { producto_id: string; nombre: string; veces: number }, arrastre: boolean) => {
+        if (top.length >= 10 || yaEsta.has(p.producto_id)) return
+        yaEsta.add(p.producto_id)
+        top.push({ producto_id: p.producto_id, nombre: p.nombre, veces: arrastre ? 0 : p.veces, arrastre })
+      }
+      for (const p of mes) agregar(p, false)
+      // Lo que falte para completar diez se llena con el podio del mes pasado.
+      for (const p of anterior) agregar(p, true)
+      res.json({ periodo: { desde: desdeMes, hasta: hoy() }, top: top.map((p, i) => ({ ...p, posicion: i + 1 })) })
+    } catch (e: any) {
+      res.status(500).json({ error: e.message })
+    }
   })
 
   // ── Productos por pedir: los que llegaron al mínimo y los que están por llegar ──
@@ -180,7 +226,7 @@ export function registrarReportes(app: Express, { db }: Deps) {
     const prevHasta = sumarDias(desde, -1)
     const prevDesde = sumarDias(desde, -n)
 
-    const [dias, medios, prods, gastos, diasPrev, gastosPrev, vencer, cierres, inventario] = await Promise.all([
+    const [dias, medios, prods, gastos, diasPrev, gastosPrev, vencer, cierres, inventario, ranking] = await Promise.all([
       db().rpc('rep_ventas_dia', { desde, hasta }),
       db().rpc('rep_ventas_medio', { desde, hasta }),
       db().rpc('rep_productos', { desde, hasta }),
@@ -192,8 +238,9 @@ export function registrarReportes(app: Express, { db }: Deps) {
       db().from('sesiones_caja').select('fecha_jornada, apertura, cierre, total_ventas, diferencia, diferencia_reales')
         .eq('estado', 'cerrada').gte('fecha_jornada', desde).lte('fecha_jornada', hasta).order('fecha_jornada'),
       db().from('productos').select('id, nombre, existencias, costo, costos_variables, activo'),
+      rankingVeces(desde, hasta).catch((error) => ({ error })),
     ])
-    for (const r of [dias, medios, prods, gastos, diasPrev, gastosPrev, vencer, cierres, inventario]) {
+    for (const r of [dias, medios, prods, gastos, diasPrev, gastosPrev, vencer, cierres, inventario, ranking]) {
       if (r.error) return res.status(500).json({ error: r.error.message })
     }
 
@@ -222,11 +269,13 @@ export function registrarReportes(app: Express, { db }: Deps) {
     // Productos: más vendidos con rotación (días de inventario al ritmo del periodo) y sin movimiento.
     const inv = inventario.data ?? []
     const existenciasDe = new Map<string, number>(inv.map((p: any) => [p.id, Number(p.existencias)]))
+    const vecesDe = new Map<string, number>((ranking as { producto_id: string; veces: number }[]).map((p) => [p.producto_id, p.veces]))
     const vendidos = (prods.data ?? []).map((p: any) => ({
-      producto_id: p.producto_id, nombre: p.nombre, es_pola: p.es_pola,
+      producto_id: p.producto_id, nombre: p.nombre, es_pola: p.es_pola, veces: vecesDe.get(p.producto_id) ?? 0,
       unidades: Number(p.unidades), total: Number(p.total), utilidad: Number(p.total) - Number(p.costo),
     }))
-    const mas_vendidos = [...vendidos].sort((a, b) => b.unidades - a.unidades).slice(0, 15).map((p) => {
+    // Mismo criterio que el podio de Ventas rápidas: primero lo que más veces se vende.
+    const mas_vendidos = [...vendidos].sort((a, b) => b.veces - a.veces || b.unidades - a.unidades || a.nombre.localeCompare(b.nombre, 'es')).slice(0, 15).map((p) => {
       const existencias = existenciasDe.get(p.producto_id) ?? 0
       const porDia = p.unidades / n
       return { ...p, existencias, dias_inventario: porDia > 0 ? Math.round(existencias / porDia) : null }

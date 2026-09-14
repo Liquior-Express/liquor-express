@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { apiFetch } from '../../lib/api'
 import { AppShell, useSesion } from '../../components/AppShell'
 import { StockBajo } from '../../components/StockBajo'
+import { Posicion } from '../../components/Posicion'
 
 interface PuntoSerie { fecha: string; ventas: number; total: number; utilidad: number; gastos: number; ganancia: number }
 interface Reporte {
@@ -14,7 +15,7 @@ interface Reporte {
   serie: PuntoSerie[]
   por_medio: { medio: string; ventas: number; total: number; reales: number }[]
   gastos_por_categoria: Record<string, number>
-  mas_vendidos: { producto_id: string; nombre: string; es_pola: boolean; unidades: number; total: number; utilidad: number; existencias: number; dias_inventario: number | null }[]
+  mas_vendidos: { producto_id: string; nombre: string; es_pola: boolean; veces: number; unidades: number; total: number; utilidad: number; existencias: number; dias_inventario: number | null }[]
   sin_movimiento: { nombre: string; existencias: number; valor: number }[]
   pola: { productos: { nombre: string; unidades: number; total: number }[]; unidades: number; total: number }
   por_vencer: { nombre: string; cantidad: number; fecha: string; dias: number }[]
@@ -199,20 +200,20 @@ function Reportes() {
           <div className="seccion-rep">
             <h3>Más vendidos y rotación</h3>
             <div className="tabla-wrap"><table className="tabla">
-              <thead><tr><th>Producto</th><th className="num">Unidades</th><th className="num">Ventas</th><th className="num">Utilidad</th><th className="num">Existencias</th><th className="num">Alcanza para</th></tr></thead>
+              <thead><tr><th>Producto</th><th className="num">Veces vendido</th><th className="num">Unidades</th><th className="num">Ventas</th><th className="num">Utilidad</th><th className="num">Existencias</th><th className="num">Alcanza para</th></tr></thead>
               <tbody>
-                {data.mas_vendidos.map((p) => (
+                {data.mas_vendidos.map((p, i) => (
                   <tr key={p.producto_id} style={{ cursor: 'default' }}>
-                    <td>{p.nombre}{p.es_pola && <span className="sello-pola">POLA</span>}</td>
-                    <td className="num">{p.unidades.toLocaleString('es-CO')}</td><td className="num">{money(p.total)}</td><td className="num">{money(p.utilidad)}</td>
+                    <td><Posicion n={i + 1} />{p.nombre}{p.es_pola && <span className="sello-pola">POLA</span>}</td>
+                    <td className="num">{p.veces.toLocaleString('es-CO')}</td><td className="num">{p.unidades.toLocaleString('es-CO')}</td><td className="num">{money(p.total)}</td><td className="num">{money(p.utilidad)}</td>
                     <td className="num">{p.existencias}</td>
                     <td className="num">{p.existencias <= 0 ? <span className="dif-mal">Sin stock</span> : p.dias_inventario === null ? '—' : p.dias_inventario <= 3 ? <span className="dif-mal">⚠ {p.dias_inventario} día(s)</span> : `${p.dias_inventario} días`}</td>
                   </tr>
                 ))}
-                {data.mas_vendidos.length === 0 && <tr><td colSpan={6} className="faint" style={{ textAlign: 'center', padding: 16 }}>Sin ventas en el periodo.</td></tr>}
+                {data.mas_vendidos.length === 0 && <tr><td colSpan={7} className="faint" style={{ textAlign: 'center', padding: 16 }}>Sin ventas en el periodo.</td></tr>}
               </tbody>
             </table></div>
-            <p className="faint" style={{ marginTop: 6 }}>"Alcanza para": días que dura el inventario actual al ritmo de venta del periodo.</p>
+            <p className="faint" style={{ marginTop: 6 }}>Ordenado por veces vendido (ventas que incluyeron el producto). "Alcanza para": días que dura el inventario actual al ritmo de venta del periodo.</p>
           </div>
 
           <StockBajo />

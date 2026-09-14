@@ -28,9 +28,10 @@ export function CambioEfectivo({ total, tasa, valor, onChange }: {
 
   return (
     <div className="cambio">
+      <div className="cambio-titulo">Efectivo · ¿en qué moneda paga?</div>
       <div className="segmento">
-        <button type="button" className={!enReales ? 'activo' : ''} onClick={() => set({ moneda: 'COP', recibido: '' })}>Paga en pesos</button>
-        <button type="button" className={enReales ? 'activo' : ''} onClick={() => set({ moneda: 'BRL', recibido: '' })}>Paga en reales</button>
+        <button type="button" className={!enReales ? 'activo' : ''} onClick={() => set({ moneda: 'COP', recibido: '' })}>Pesos</button>
+        <button type="button" className={enReales ? 'activo' : ''} onClick={() => set({ moneda: 'BRL', recibido: '' })}>Reales</button>
       </div>
 
       {enReales && !tasa ? (
