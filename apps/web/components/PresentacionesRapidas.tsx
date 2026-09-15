@@ -7,9 +7,11 @@ import { apiFetch } from '../lib/api'
 // por presentación: ej. 5 × Caja → suma 150 unidades al inventario.
 interface Pres { id: string; nombre: string; factor_unidades: number; precio: number }
 
-const PLANTILLAS: Record<string, { label: string; items: { nombre: string; factor: number }[] }> = {
+// Cigarrillos: la cajetilla y la media llegan cerradas y tienen su propio precio (se propone y se ajusta).
+// Cerveza: el six y la caja se cobran al precio de la unidad por la cantidad (precio vacío).
+const PLANTILLAS: Record<string, { label: string; porUnidad?: boolean; items: { nombre: string; factor: number }[] }> = {
   cigarrillo: { label: '🚬 Cigarrillos', items: [{ nombre: 'Cajetilla', factor: 20 }, { nombre: 'Media cajetilla', factor: 10 }] },
-  cerveza: { label: '🍺 Cervezas', items: [{ nombre: 'Caja', factor: 30 }, { nombre: 'Six pack', factor: 6 }] },
+  cerveza: { label: '🍺 Cervezas', porUnidad: true, items: [{ nombre: 'Caja', factor: 30 }, { nombre: 'Six pack', factor: 6 }] },
 }
 
 export function PresentacionesRapidas({ productoId, precioUnidad, presentaciones, setPresentaciones, onExistencias }: {
@@ -31,7 +33,7 @@ export function PresentacionesRapidas({ productoId, precioUnidad, presentaciones
         if (presentaciones.some((p) => p.nombre.toLowerCase() === it.nombre.toLowerCase())) continue
         const r = await apiFetch<{ presentacion: Pres }>(`/api/productos/${productoId}/presentaciones`, {
           method: 'POST',
-          body: JSON.stringify({ nombre: it.nombre, factor_unidades: it.factor, precio: Math.round(precioUnidad * it.factor) }),
+          body: JSON.stringify({ nombre: it.nombre, factor_unidades: it.factor, precio: PLANTILLAS[clave].porUnidad ? 0 : Math.round(precioUnidad * it.factor) }),
         })
         nuevas.push(r.presentacion)
       }
@@ -51,7 +53,7 @@ export function PresentacionesRapidas({ productoId, precioUnidad, presentaciones
     const nombre = presSel ? presSel.nombre : 'und'
     try {
       const r = await apiFetch<{ existencias: number }>(`/api/productos/${productoId}/entrada`, {
-        method: 'POST', body: JSON.stringify({ unidades, referencia: `${entrada.cantidad}× ${nombre}` }),
+        method: 'POST', body: JSON.stringify({ unidades, presentacion_id: presSel?.id ?? null, referencia: `${entrada.cantidad}× ${nombre}` }),
       })
       onExistencias(r.existencias)
       setMsg({ ok: true, texto: `Entrada: +${unidades} und (${entrada.cantidad}× ${nombre}). Existencias: ${r.existencias}` })

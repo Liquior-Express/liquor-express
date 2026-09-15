@@ -7,6 +7,7 @@ import { nuevoId } from '../../lib/cola'
 import { AppShell, useSesion } from '../../components/AppShell'
 import { Modal } from '../../components/Modal'
 import { useDialog } from '../../components/Dialog'
+import { Pais } from '../../components/Pais'
 
 interface Proveedor { id: string; nombre: string; contacto: string | null; nit: string | null; origen: 'colombia' | 'brasil'; activo: boolean }
 interface Producto { id: string; nombre: string; precio_venta: number; margen_pct?: number; controla_vencimiento: boolean; existencias: number; activo: boolean }
@@ -175,7 +176,7 @@ function Compras() {
               <div style={{ display: 'flex', gap: 8 }}>
                 <select value={cab.proveedor_id} onChange={(e) => elegirProveedor(e.target.value)}>
                   <option value="">Elige…</option>
-                  {proveedores.filter((p) => p.activo).map((p) => <option key={p.id} value={p.id}>{p.origen === 'brasil' ? '🇧🇷 ' : '🇨🇴 '}{p.nombre}</option>)}
+                  {proveedores.filter((p) => p.activo).map((p) => <option key={p.id} value={p.id}>{p.nombre} ({p.origen === 'brasil' ? 'Brasil' : 'Colombia'})</option>)}
                 </select>
                 <button type="button" className="btn ghost" style={{ marginTop: 0, padding: '0 14px' }} onClick={proveedorRapido}>＋</button>
               </div>
@@ -188,8 +189,8 @@ function Compras() {
           <div className="grid2" style={{ marginTop: 12 }}>
             <div className="field"><label>Origen y moneda</label>
               <div className="segmento">
-                <button type="button" className={!enBrl ? 'activo' : ''} onClick={() => setCab({ ...cab, moneda: 'COP' })}>🇨🇴 Pesos</button>
-                <button type="button" className={enBrl ? 'activo' : ''} onClick={() => setCab({ ...cab, moneda: 'BRL', origen: 'brasil' })}>🇧🇷 Reales</button>
+                <button type="button" className={!enBrl ? 'activo' : ''} onClick={() => setCab({ ...cab, moneda: 'COP' })}><Pais origen="colombia" />Pesos</button>
+                <button type="button" className={enBrl ? 'activo' : ''} onClick={() => setCab({ ...cab, moneda: 'BRL', origen: 'brasil' })}><Pais origen="brasil" />Reales</button>
               </div>
             </div>
             {enBrl && <div className="field"><label>Tasa (pesos por R$)</label><input type="number" inputMode="numeric" value={cab.tasa} onChange={(e) => setCab({ ...cab, tasa: e.target.value })} /></div>}
@@ -275,7 +276,7 @@ function Compras() {
               {compras.map((c) => (
                 <tr key={c.id} onClick={() => verDetalle(c.id)}>
                   <td>{c.fecha}</td>
-                  <td>{c.origen === 'brasil' ? '🇧🇷 ' : ''}{c.proveedor_nombre}</td>
+                  <td>{c.origen === 'brasil' && <Pais origen="brasil" />}{c.proveedor_nombre}</td>
                   <td>{c.factura ?? <span className="faint">—</span>}</td>
                   <td className="num">{money(c.total)}</td>
                   <td>{FORMA_LABEL[c.forma_pago] ?? c.forma_pago}</td>
@@ -316,7 +317,7 @@ function Compras() {
               </div>
               <div className="field"><label>Origen</label>
                 <select value={provForm.origen} onChange={(e) => setProvForm({ ...provForm, origen: e.target.value })}>
-                  <option value="colombia">🇨🇴 Colombia</option><option value="brasil">🇧🇷 Brasil</option>
+                  <option value="colombia">Colombia</option><option value="brasil">Brasil</option>
                 </select></div>
               <button className="btn" type="submit">Crear proveedor</button>
             </div>
@@ -325,7 +326,7 @@ function Compras() {
             <h4 className="sub-modal">Proveedores</h4>
             {proveedores.map((p) => (
               <div key={p.id} className="row-between" style={{ fontSize: 13.5, padding: '6px 0', opacity: p.activo ? 1 : 0.5 }}>
-                <span>{p.origen === 'brasil' ? '🇧🇷' : '🇨🇴'} {p.nombre} <span className="faint">{p.contacto ? `· ${p.contacto}` : ''}{p.nit ? ` · NIT ${p.nit}` : ''}</span></span>
+                <span><Pais origen={p.origen} />{p.nombre} <span className="faint">{p.contacto ? `· ${p.contacto}` : ''}{p.nit ? ` · NIT ${p.nit}` : ''}</span></span>
                 <button className="link-btn" onClick={() => alternarProveedor(p)}>{p.activo ? 'Desactivar' : 'Activar'}</button>
               </div>
             ))}

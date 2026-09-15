@@ -1,6 +1,7 @@
 import type { Express } from 'express'
 import { autenticar, requiereRol } from '../auth.ts'
-import { hoy, r2, recalcularCosto } from './comun.ts'
+import { hoy, r2, recalcularCosto, hayEmpaques } from './comun.ts'
+import { moverEmpaques } from './empaques.ts'
 
 // Compras (recepción de mercancía) y proveedores.
 // Una compra: suma unidades al inventario, crea lotes con vencimiento, actualiza el
@@ -71,7 +72,8 @@ export function registrarCompras(app: Express, { db, auditar, registrarMovimient
     const cv = Math.max(0, Number(b.costos_variables) || 0)
 
     const ids = [...new Set(items.map((i) => String(i.producto_id)))]
-    const { data: prods, error: e1 } = await db().from('productos').select('id, nombre, precio_venta, margen_pct').in('id', ids)
+    const emp = await hayEmpaques(db)
+    const { data: prods, error: e1 } = await db().from('productos').select('id, nombre, precio_venta, margen_pct' + (emp ? ', controla_empaques' : '')).in('id', ids)
     if (e1) return res.status(500).json({ error: e1.message })
     const presIds = items.map((i) => i.presentacion_id).filter(Boolean)
     const { data: pres } = presIds.length
@@ -143,6 +145,10 @@ export function registrarCompras(app: Express, { db, auditar, registrarMovimient
     for (const l of lineas) {
       const { data: cur } = await db().from('productos').select('existencias, precio_venta').eq('id', l.p.id).single()
       await db().from('productos').update({ existencias: Number(cur.existencias) + l.unidades }).eq('id', l.p.id)
+      // Con control por empaques, lo que llega por presentación entra como empaques cerrados.
+      if (emp && l.p.controla_empaques) {
+        await moverEmpaques(db, l.p, l.pr ? { cerradas: [{ presentacion_id: l.pr.id, cantidad: l.cantidad }] } : { sueltos: l.unidades })
+      }
       await registrarMovimiento(l.p.id, 'entrada', l.unidades, req.usuario!.id, ref.slice(0, 60))
       if (l.fecha_vencimiento) {
         await db().from('lotes').insert({ producto_id: l.p.id, cantidad: l.unidades, fecha_vencimiento: l.fecha_vencimiento, costo_lote: r2(l.costoUnd), compra_id: compra.id })

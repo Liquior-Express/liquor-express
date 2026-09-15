@@ -78,9 +78,14 @@ export function registrarGastos(app: Express, { db, auditar }: Deps) {
   // ── Caja menor ──
   app.get('/api/caja-menor', autenticar, gestor, async (_req, res) => {
     const cm = await cajaMenor()
-    const { data: movs } = await db().from('movimientos_caja_menor')
-      .select('id, tipo, valor, concepto, origen, creado_en').order('creado_en', { ascending: false }).limit(30)
-    res.json({ saldo: Number(cm.saldo), movimientos: movs ?? [] })
+    const [{ data: movs }, { data: arqueos }] = await Promise.all([
+      db().from('movimientos_caja_menor')
+        .select('id, tipo, valor, concepto, origen, creado_en').order('creado_en', { ascending: false }).limit(30),
+      // Los conteos quedan en la bitácora: son una revisión, no mueven plata por sí solos.
+      db().from('auditoria').select('detalle, creado_en, usuario:usuarios(nombre)')
+        .eq('accion', 'arqueo_caja_menor').order('creado_en', { ascending: false }).limit(5),
+    ])
+    res.json({ saldo: Number(cm.saldo), movimientos: movs ?? [], arqueos: arqueos ?? [] })
   })
 
   app.post('/api/caja-menor/reponer', autenticar, gestor, async (req, res) => {
@@ -101,6 +106,39 @@ export function registrarGastos(app: Express, { db, auditar }: Deps) {
     res.json({ saldo })
   })
 
+  // Conteo (arqueo) de la caja menor: compara lo que hay en el sobre con el saldo del sistema.
+  // Si se decide registrar la diferencia, un faltante entra como gasto (es plata que se fue y
+  // debe bajar la ganancia) y un sobrante vuelve al saldo. El saldo queda en lo contado.
+  app.post('/api/caja-menor/arqueo', autenticar, gestor, async (req, res) => {
+    const crudo = req.body?.contado
+    const contado = Number(crudo)
+    if (crudo === undefined || crudo === null || crudo === '' || !Number.isFinite(contado) || contado < 0) {
+      return res.status(400).json({ error: 'Escribe cuánto hay en la caja menor' })
+    }
+    const cm = await cajaMenor()
+    const saldo = Number(cm.saldo)
+    const diferencia = Math.round(contado - saldo)
+    const registrada = req.body?.registrar === true && diferencia !== 0
+    const usuario_id = req.usuario!.id
+
+    if (registrada && diferencia < 0) {
+      const valor = -diferencia
+      const descripcion = 'Faltante en conteo de caja menor'
+      const { data: g, error } = await db().from('gastos')
+        .insert({ categoria: 'otros', descripcion, valor, paga_con: 'caja_menor', fecha: hoy(), usuario_id }).select('id').single()
+      if (error) return res.status(500).json({ error: error.message })
+      await db().from('movimientos_caja_menor').insert({ tipo: 'gasto', valor, gasto_id: g.id, usuario_id, concepto: 'Gasto: otros · ' + descripcion })
+    }
+    if (registrada && diferencia > 0) {
+      // Sin origen: no salió de la caja ni del banco, así que el flujo de caja no la cuenta.
+      await db().from('movimientos_caja_menor').insert({ tipo: 'reposicion', valor: diferencia, usuario_id, concepto: 'Sobrante en conteo de caja menor' })
+    }
+    if (registrada) await db().from('caja_menor').update({ saldo: contado }).eq('id', cm.id)
+
+    await auditar(usuario_id, 'arqueo_caja_menor', 'caja_menor', cm.id, { saldo_sistema: saldo, contado, diferencia, registrada })
+    res.json({ saldo_sistema: saldo, contado, diferencia, registrada, saldo: registrada ? contado : saldo })
+  })
+
   // ── Flujo de caja ──
   // Entradas: ventas (todos los medios) + entradas manuales de caja.
   // Salidas: compras pagadas + gastos (caja/transferencia) + reposiciones de caja menor + salidas manuales de caja.
@@ -115,7 +153,7 @@ export function registrarGastos(app: Express, { db, auditar }: Deps) {
       db().from('compras').select('total, pagada_en').eq('estado_pago', 'pagada')
         .gte('pagada_en', inicioDia(desde)).lte('pagada_en', finDia(hasta)),
       db().from('gastos').select('valor, fecha').neq('paga_con', 'caja_menor').gte('fecha', desde).lte('fecha', hasta),
-      db().from('movimientos_caja_menor').select('valor, creado_en').eq('tipo', 'reposicion')
+      db().from('movimientos_caja_menor').select('valor, creado_en').eq('tipo', 'reposicion').not('origen', 'is', null)
         .gte('creado_en', inicioDia(desde)).lte('creado_en', finDia(hasta)),
       db().from('tasa_real').select('fecha, valor').lte('fecha', hasta).order('fecha'),
     ])

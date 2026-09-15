@@ -61,7 +61,7 @@ export function registrarAdmin(app: Express, { db, auditar }: Deps) {
       }
 
       // 2) Preparar filas: nuevas vs. existentes (mismo nombre, sin importar mayúsculas).
-      const prods = await todas('productos', 'id, nombre, existencias')
+      const prods = await todas('productos', '*')
       const porNombre = new Map<string, any>(prods.map((p: any) => [p.nombre.trim().toLowerCase(), p]))
       const errores: string[] = []
       const nuevos: any[] = []
@@ -121,12 +121,16 @@ export function registrarAdmin(app: Express, { db, auditar }: Deps) {
       const ajustes: any[] = []
       for (const a of actualizar) {
         const campos = { ...a.campos }
-        if (a.existencias !== undefined) campos.existencias = a.existencias
+        // En productos con control por empaques las existencias salen del conteo de empaques.
+        const conEmpaques = !!a.producto.controla_empaques
+        if (a.existencias !== undefined && conEmpaques) {
+          errores.push(`Fila ${a.fila} (${a.producto.nombre}): controla empaques; sus existencias se actualizan con el conteo de empaques`)
+        } else if (a.existencias !== undefined) campos.existencias = a.existencias
         if (Object.keys(campos).length === 0) { actualizados++; continue }
         const { error } = await db().from('productos').update(campos).eq('id', a.producto.id)
         if (error) { errores.push(`Fila ${a.fila} (${a.producto.nombre}): ${error.code === '23505' ? 'código de barras repetido' : error.message}`); continue }
         actualizados++
-        const delta = a.existencias !== undefined ? a.existencias - Number(a.producto.existencias) : 0
+        const delta = a.existencias !== undefined && !conEmpaques ? a.existencias - Number(a.producto.existencias) : 0
         if (delta) ajustes.push({ producto_id: a.producto.id, tipo: 'ajuste', cantidad: delta, referencia: 'importación', usuario_id: req.usuario!.id })
       }
       for (let i = 0; i < ajustes.length; i += 500) await db().from('movimientos_inventario').insert(ajustes.slice(i, i + 500))

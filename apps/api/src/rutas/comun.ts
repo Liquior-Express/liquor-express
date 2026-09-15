@@ -7,6 +7,20 @@ export const inicioDia = (fecha: string) => `${fecha}T00:00:00-05:00`
 export const finDia = (fecha: string) => `${fecha}T23:59:59.999-05:00`
 export const primerDiaMes = () => hoy().slice(0, 8) + '01'
 
+// ¿Ya está aplicada la migración 0012 (control por empaques)? Mientras no lo esté, todo
+// funciona como antes. Se pregunta a la base y se recuerda; si aún no está, se vuelve a
+// mirar como mucho cada minuto, así se activa sola sin reiniciar el servidor.
+let empaquesListos = false
+let ultimaRevisionEmpaques = 0
+export async function hayEmpaques(db: () => any): Promise<boolean> {
+  if (empaquesListos) return true
+  if (Date.now() - ultimaRevisionEmpaques < 60_000) return false
+  ultimaRevisionEmpaques = Date.now()
+  const { error } = await db().from('presentaciones').select('cerradas').limit(1)
+  empaquesListos = !error
+  return empaquesListos
+}
+
 export const r2 = (n: number) => Math.round(n * 100) / 100
 export const a50 = (n: number) => Math.round(n / 50) * 50 // pesos: la moneda más pequeña es de $50
 export const suma = (arr: any[], f: (x: any) => any) => arr.reduce((a, x) => a + (Number(f(x)) || 0), 0)

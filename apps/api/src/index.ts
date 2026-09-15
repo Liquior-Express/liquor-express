@@ -200,7 +200,8 @@ app.get('/api/productos', autenticar, async (req, res) => {
   res.json({ fuente: 'supabase', productos })
 })
 
-import { descontarLotes } from './rutas/comun.ts'
+import { descontarLotes, hayEmpaques } from './rutas/comun.ts'
+import { moverEmpaques } from './rutas/empaques.ts'
 
 // Lote "manual" (sin compra) con la fecha puesta desde Inventario: cubre las unidades que
 // no vienen de una compra registrada. Los lotes de las compras no se tocan.
@@ -218,7 +219,7 @@ async function sincronizarLote(productoId: string, fecha: string | null, cantida
 }
 
 // Registra un movimiento en el kardex (no interrumpe el flujo).
-async function registrarMovimiento(productoId: string, tipo: 'entrada' | 'venta' | 'merma' | 'ajuste', cantidad: number, usuarioId: string, referencia?: string) {
+async function registrarMovimiento(productoId: string, tipo: 'entrada' | 'venta' | 'merma' | 'ajuste' | 'apertura', cantidad: number, usuarioId: string, referencia?: string) {
   if (!supabase) return
   try { await db().from('movimientos_inventario').insert({ producto_id: productoId, tipo, cantidad, usuario_id: usuarioId, referencia }) } catch {}
 }
@@ -239,9 +240,18 @@ function saneaProducto(body: any) {
   return p
 }
 
+// El código de barras de un producto no puede ser el de una presentación (cajetilla, media…).
+async function codigoDePresentacion(codigo: unknown): Promise<string | null> {
+  if (!codigo || !(await hayEmpaques(db))) return null
+  const { data } = await db().from('presentaciones').select('nombre').eq('codigo_barras', codigo).limit(1).maybeSingle()
+  return data ? `Ese código de barras ya es de una presentación (${data.nombre})` : null
+}
+
 app.post('/api/productos', autenticar, requiereRol('admin', 'gerencia'), async (req, res) => {
   const p = saneaProducto(req.body ?? {})
   if (!p.nombre) return res.status(400).json({ error: 'El nombre del producto es obligatorio' })
+  const choque = await codigoDePresentacion(p.codigo_barras)
+  if (choque) return res.status(409).json({ error: choque })
   const { data, error } = await db().from('productos').insert(p).select('*').single()
   if (error) return res.status(500).json({ error: error.message })
   if (data.controla_vencimiento && req.body?.fecha_vencimiento) {
@@ -256,12 +266,16 @@ app.patch('/api/productos/:id', autenticar, requiereRol('admin', 'gerencia'), as
   const { id } = req.params
   const p = saneaProducto(req.body ?? {})
   if (Object.keys(p).length === 0) return res.status(400).json({ error: 'Nada que actualizar' })
+  const choque = await codigoDePresentacion(p.codigo_barras)
+  if (choque) return res.status(409).json({ error: choque })
 
-  // Existencias previas para registrar el ajuste en el kardex.
+  // Existencias previas para registrar el ajuste en el kardex. En productos con control por
+  // empaques el total sale del conteo de empaques, así que aquí no se toca.
   let prevExist: number | null = null
   if (p.existencias !== undefined) {
-    const { data: cur } = await db().from('productos').select('existencias').eq('id', id).single()
-    prevExist = cur ? Number(cur.existencias) : null
+    const { data: cur } = await db().from('productos').select('*').eq('id', id).single()
+    if (cur?.controla_empaques) delete p.existencias
+    else prevExist = cur ? Number(cur.existencias) : null
   }
 
   const { data, error } = await db().from('productos').update(p).eq('id', id).select('*').single()
@@ -285,7 +299,8 @@ app.patch('/api/productos/:id', autenticar, requiereRol('admin', 'gerencia'), as
 
 // ── Presentaciones (fraccionamiento: caja / six / cartón / cajetilla / unidad) ──
 app.get('/api/productos/:id/presentaciones', autenticar, async (req, res) => {
-  const { data, error } = await db().from('presentaciones').select('id, nombre, factor_unidades, precio').eq('producto_id', req.params.id).order('factor_unidades', { ascending: false })
+  const cols = 'id, nombre, factor_unidades, precio' + ((await hayEmpaques(db)) ? ', cerradas, codigo_barras' : '')
+  const { data, error } = await db().from('presentaciones').select(cols).eq('producto_id', req.params.id).order('factor_unidades', { ascending: false })
   if (error) return res.status(500).json({ error: error.message })
   res.json({ presentaciones: data })
 })
@@ -323,16 +338,29 @@ app.post('/api/productos/:id/merma', autenticar, requiereRol('admin', 'gerencia'
   if (!cantidad || cantidad <= 0) return res.status(400).json({ error: 'Cantidad inválida' })
   if (!['vencido', 'faltante', 'averia'].includes(motivo)) return res.status(400).json({ error: 'Motivo inválido' })
 
-  const { data: prod } = await db().from('productos').select('existencias').eq('id', id).single()
+  const { data: prod } = await db().from('productos').select('*').eq('id', id).single()
   if (!prod) return res.status(404).json({ error: 'Producto no encontrado' })
-  const nueva = Number(prod.existencias) - cantidad
 
-  await db().from('mermas').insert({ producto_id: id, cantidad, motivo, usuario_id: req.usuario!.id })
+  // Con control por empaques la merma puede ser de sueltos o de empaques cerrados (cantidad en empaques).
+  let unidades = cantidad
+  let pr: any = null
+  if (prod.controla_empaques && req.body?.presentacion_id) {
+    const { data } = await db().from('presentaciones').select('id, nombre, factor_unidades').eq('id', req.body.presentacion_id).eq('producto_id', id).maybeSingle()
+    if (!data) return res.status(400).json({ error: 'Presentación inválida' })
+    pr = data
+    unidades = cantidad * Number(data.factor_unidades)
+  }
+  const nueva = Number(prod.existencias) - unidades
+
+  await db().from('mermas').insert({ producto_id: id, cantidad: unidades, motivo, usuario_id: req.usuario!.id })
   const { error } = await db().from('productos').update({ existencias: nueva }).eq('id', id)
   if (error) return res.status(500).json({ error: error.message })
-  await descontarLotes(db, id, cantidad) // la merma sale del lote que vence primero
-  await registrarMovimiento(id, 'merma', -cantidad, req.usuario!.id, motivo)
-  await auditar(req.usuario!.id, 'merma', 'productos', id, { cantidad, motivo })
+  if (prod.controla_empaques) {
+    await moverEmpaques(db, prod, pr ? { cerradas: [{ presentacion_id: pr.id, cantidad: -cantidad }] } : { sueltos: -cantidad })
+  }
+  await descontarLotes(db, id, unidades) // la merma sale del lote que vence primero
+  await registrarMovimiento(id, 'merma', -unidades, req.usuario!.id, pr ? `${motivo} · ${cantidad}× ${pr.nombre}` : motivo)
+  await auditar(req.usuario!.id, 'merma', 'productos', id, { cantidad: unidades, motivo, presentacion: pr?.nombre })
   res.json({ ok: true, existencias: nueva })
 })
 
@@ -380,6 +408,10 @@ import { registrarReportes } from './rutas/reportes.ts'
 import { registrarAdmin } from './rutas/admin.ts'
 registrarReportes(app, { db })
 registrarAdmin(app, { db, auditar })
+
+// Control por empaques (cigarrillos): conteo de cerradas y sueltos, y código por presentación.
+import { registrarEmpaques } from './rutas/empaques.ts'
+registrarEmpaques(app, { db, auditar, registrarMovimiento })
 
 // Crea el bucket de fotos si no existe (idempotente).
 async function asegurarBucket() {

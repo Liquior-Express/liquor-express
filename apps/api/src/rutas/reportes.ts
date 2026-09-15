@@ -235,7 +235,7 @@ export function registrarReportes(app: Express, { db }: Deps) {
       db().from('gastos').select('valor').gte('fecha', prevDesde).lte('fecha', prevHasta),
       db().from('lotes').select('cantidad, fecha_vencimiento, producto:productos(nombre, activo)')
         .gt('cantidad', 0).not('fecha_vencimiento', 'is', null).lte('fecha_vencimiento', sumarDias(hoy(), 30)).order('fecha_vencimiento'),
-      db().from('sesiones_caja').select('fecha_jornada, apertura, cierre, total_ventas, diferencia, diferencia_reales')
+      db().from('sesiones_caja').select('fecha_jornada, apertura, cierre, total_ventas, total_nequi, total_bold, total_pix, diferencia, diferencia_reales')
         .eq('estado', 'cerrada').gte('fecha_jornada', desde).lte('fecha_jornada', hasta).order('fecha_jornada'),
       db().from('productos').select('id, nombre, existencias, costo, costos_variables, activo'),
       rankingVeces(desde, hasta).catch((error) => ({ error })),

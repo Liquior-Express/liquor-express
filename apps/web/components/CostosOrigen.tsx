@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { apiFetch } from '../lib/api'
+import { Pais } from './Pais'
 
 // Costos del mismo producto según dónde se compró (Colombia / Brasil).
 // Un solo stock: el precio de venta no cambia, solo la utilidad de cada origen.
@@ -72,7 +73,7 @@ export function CostosOrigen({ productoId, precioVenta, onCambio }: {
           return (
             <div key={c.id} className="row-between" style={{ fontSize: 13, gap: 8 }}>
               <span>
-                {c.origen === 'brasil' ? '🇧🇷' : '🇨🇴'} {c.proveedor || (c.origen === 'brasil' ? 'Brasil' : 'Colombia')}
+                <Pais origen={c.origen} />{c.proveedor || (c.origen === 'brasil' ? 'Brasil' : 'Colombia')}
                 <span className="faint"> · {c.moneda === 'BRL' ? `R$ ${Number(c.costo_moneda).toLocaleString('es-CO')} × ${money(c.tasa ?? 0)} = ` : ''}{money(c.costo_cop)}{Number(c.costos_variables) ? ` + ${money(c.costos_variables)}` : ''}</span>
               </span>
               <span style={{ display: 'flex', gap: 10, alignItems: 'center', whiteSpace: 'nowrap' }}>
@@ -90,8 +91,8 @@ export function CostosOrigen({ productoId, precioVenta, onCambio }: {
         <div className="grid2">
           <div className="field"><label>Origen</label>
             <select value={form.origen} onChange={(e) => elegirOrigen(e.target.value)}>
-              <option value="colombia">🇨🇴 Colombia</option>
-              <option value="brasil">🇧🇷 Brasil</option>
+              <option value="colombia">Colombia</option>
+              <option value="brasil">Brasil</option>
             </select></div>
           <div className="field"><label>Proveedor</label>
             <input value={form.proveedor} placeholder="opcional" onChange={(e) => setForm({ ...form, proveedor: e.target.value })} /></div>

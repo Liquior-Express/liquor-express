@@ -7,9 +7,13 @@ import { useDialog } from '../../components/Dialog'
 import { CambioEfectivo, PAGO_INICIAL, type PagoEfectivo } from '../../components/CambioEfectivo'
 import { encolarVenta, nuevoId } from '../../lib/cola'
 import { Posicion } from '../../components/Posicion'
+import { Pais } from '../../components/Pais'
+import { BotonCamara } from '../../components/EscanerCamara'
+import { Modal } from '../../components/Modal'
+import { resumirEmpaques, sueltosFaltantes, cerradasDisponibles, podarAperturas, type Apertura } from '../../lib/empaques'
 
-interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null; codigo_barras: string | null }
-interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; precio: number }
+interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null; codigo_barras: string | null; controla_empaques?: boolean; sueltos?: number }
+interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; precio: number; cerradas?: number; codigo_barras?: string | null }
 interface Linea { key: string; producto: Producto; pres: Pres | null; cantidad: number }
 interface Resumen { cantidad: number; total: number; por_medio: Record<string, number>; utilidad?: number }
 interface Top { producto_id: string; nombre: string; veces: number; posicion: number; arrastre: boolean }
@@ -19,7 +23,7 @@ const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es
 const reales = (n: number) => 'R$ ' + (Number(n) || 0).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const MEDIOS: { id: Medio; label: string }[] = [
   { id: 'efectivo', label: '💵 Efectivo' }, { id: 'nequi', label: '📱 Nequi' },
-  { id: 'bold', label: '💳 Bold' }, { id: 'pix', label: '🇧🇷 PIX (R$)' },
+  { id: 'bold', label: '💳 Bold' }, { id: 'pix', label: '💠 PIX (R$)' },
 ]
 const precioDe = (l: { producto: Producto; pres: Pres | null }) =>
   l.pres ? (Number(l.pres.precio) || l.producto.precio_venta * l.pres.factor_unidades) : l.producto.precio_venta
@@ -47,6 +51,10 @@ function Ventas() {
   const [pago, setPago] = useState<PagoEfectivo>(PAGO_INICIAL)
   const [cobrando, setCobrando] = useState(false)
   const [msg, setMsg] = useState<{ tipo: 'ok' | 'error'; texto: string } | null>(null)
+  // Cigarrillos (control por empaques): empaques que se abren en esta venta y productos que el
+  // cajero decidió vender sin abrir. Las aperturas viajan con la venta al servidor.
+  const [aperturas, setAperturas] = useState<Apertura[]>([])
+  const [sinAbrir, setSinAbrir] = useState<string[]>([])
 
   const cargar = useCallback(async () => {
     const [p, pr, t, v, c, tp] = await Promise.all([
@@ -98,6 +106,45 @@ function Ventas() {
     setCarrito((c) => c.map((l) => (l.key === key ? { ...l, cantidad } : l)))
   }
 
+  // ── Control por empaques en la venta ──
+  const presDe = (productoId: string) => pres.filter((x) => x.producto_id === productoId)
+  // Por cada cigarrillo en la venta: sueltos pedidos y empaques cerrados pedidos por presentación.
+  const empaquesEnVenta = useMemo(() => {
+    const m = new Map<string, { p: Producto; sueltos: number; cerradas: Record<string, number> }>()
+    for (const l of carrito) {
+      if (!l.producto.controla_empaques) continue
+      const e = m.get(l.producto.id) ?? { p: l.producto, sueltos: 0, cerradas: {} }
+      if (l.pres) e.cerradas[l.pres.id] = (e.cerradas[l.pres.id] ?? 0) + l.cantidad
+      else e.sueltos += l.cantidad
+      m.set(l.producto.id, e)
+    }
+    return m
+  }, [carrito])
+  // Si la venta ya no necesita un empaque abierto (se quitó un suelto), se desmarca.
+  useEffect(() => {
+    setAperturas((actuales) => {
+      const nuevas = [...empaquesEnVenta.values()].flatMap(({ p, sueltos }) =>
+        podarAperturas(p.sueltos, sueltos, actuales.filter((a) => a.producto_id === p.id), pres.filter((x) => x.producto_id === p.id)))
+      return nuevas.length === actuales.length ? actuales : nuevas
+    })
+    if (carrito.length === 0) setSinAbrir([])
+  }, [empaquesEnVenta, pres, carrito.length])
+  // Cigarrillo al que le faltan sueltos para la venta y que tiene empaques cerrados para abrir.
+  const faltaAbrir = useMemo(() => {
+    for (const { p, sueltos, cerradas } of empaquesEnVenta.values()) {
+      if (sinAbrir.includes(p.id)) continue
+      const ps = pres.filter((x) => x.producto_id === p.id)
+      const suyas = aperturas.filter((a) => a.producto_id === p.id)
+      const falta = sueltosFaltantes(p.sueltos, sueltos, suyas, ps)
+      if (falta <= 0) continue
+      const opciones = ps.filter((x) => Number(x.factor_unidades) > 1)
+        .map((x) => ({ x, quedan: cerradasDisponibles(x, cerradas[x.id] ?? 0, suyas) }))
+        .filter((o) => o.quedan > 0)
+      if (opciones.length) return { p, falta, opciones }
+    }
+    return null
+  }, [empaquesEnVenta, aperturas, sinAbrir, pres])
+
   const total = carrito.reduce((s, l) => s + precioDe(l) * l.cantidad, 0)
   const unidades = carrito.reduce((s, l) => s + l.cantidad, 0)
   const tasaHoy = tasa?.es_de_hoy ? tasa.valor : null
@@ -120,8 +167,9 @@ function Ventas() {
       cliente_id: nuevoId(), vendida_en: new Date().toISOString(), medio_pago: medio,
       items: carrito.map((l) => ({ producto_id: l.producto.id, presentacion_id: l.pres?.id ?? null, cantidad: l.cantidad })),
       efectivo: medio === 'efectivo' ? { moneda: pago.moneda, recibido: Number(pago.recibido) || 0, cambio_en: pago.cambioEn } : undefined,
+      aperturas: aperturas.length ? aperturas : undefined,
     }
-    const limpiar = () => { setCarrito([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setBuscar(''); setCarritoAbierto(false); buscarRef.current?.focus() }
+    const limpiar = () => { setCarrito([]); setAperturas([]); setSinAbrir([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setBuscar(''); setCarritoAbierto(false); buscarRef.current?.focus() }
     try {
       const r = await apiFetch<{ venta: { total: number; valor_reales: number | null; cambio: number | null; cambio_en: string | null }; avisos: string[] }>('/api/ventas', {
         method: 'POST', body: JSON.stringify(body),
@@ -138,7 +186,17 @@ function Ventas() {
         encolarVenta(body)
         setProductos((ps) => ps.map((p) => {
           const u = carrito.filter((l) => l.producto.id === p.id).reduce((s, l) => s + l.cantidad * (l.pres ? l.pres.factor_unidades : 1), 0)
-          return u ? { ...p, existencias: p.existencias - u } : p
+          if (!u) return p
+          if (!p.controla_empaques) return { ...p, existencias: p.existencias - u }
+          // Sin señal también se mueven los sueltos: entran los del empaque abierto y salen los vendidos.
+          const abiertos = aperturas.filter((a) => a.producto_id === p.id).reduce((s, a) => s + (Number(pres.find((x) => x.id === a.presentacion_id)?.factor_unidades) || 0), 0)
+          const sueltosVendidos = carrito.filter((l) => l.producto.id === p.id && !l.pres).reduce((s, l) => s + l.cantidad, 0)
+          return { ...p, existencias: p.existencias - u, sueltos: (p.sueltos ?? 0) + abiertos - sueltosVendidos }
+        }))
+        setPres((xs) => xs.map((x) => {
+          if (!productos.find((p) => p.id === x.producto_id)?.controla_empaques) return x
+          const menos = carrito.filter((l) => l.pres?.id === x.id).reduce((s, l) => s + l.cantidad, 0) + aperturas.filter((a) => a.presentacion_id === x.id).length
+          return menos ? { ...x, cerradas: (x.cerradas ?? 0) - menos } : x
         }))
         setMsg({ tipo: 'ok', texto: `Sin conexión: venta de ${money(total)} guardada en el equipo; se enviará sola al volver la señal.` })
         limpiar()
@@ -150,11 +208,50 @@ function Ventas() {
   function onBuscarKey(e: React.KeyboardEvent) {
     if (e.key !== 'Enter') return
     const q = buscar.trim()
-    const porCodigo = q ? productos.find((p) => p.codigo_barras && p.codigo_barras === q) : undefined
-    const elegido = porCodigo ?? filtrados[0]
+    const leido = q ? buscarCodigo(q) : null
+    if (leido) { agregar(leido.p, leido.x); setBuscar(''); return }
+    const elegido = filtrados[0]
     if (elegido) { agregar(elegido, null); setBuscar('') }
     else if (q) setMsg({ tipo: 'error', texto: `No encontré "${q}"` })
   }
+
+  // Un código puede ser de un producto (se vende la unidad) o de una presentación (cajetilla, media…).
+  function buscarCodigo(codigo: string): { p: Producto; x: Pres | null } | null {
+    const x = pres.find((y) => y.codigo_barras && y.codigo_barras === codigo)
+    const dePres = x ? productos.find((q) => q.id === x.producto_id) : undefined
+    if (x && dePres) return { p: dePres, x }
+    const p = productos.find((q) => q.codigo_barras && q.codigo_barras === codigo)
+    return p ? { p, x: null } : null
+  }
+
+  // Lector de código de barras en toda la pantalla: el lector "escribe" muy rápido y termina
+  // en Enter. Así cada lectura entra directo al carrito aunque el foco haya quedado en un
+  // botón, y ese Enter nunca presiona el botón enfocado (por ejemplo, Cobrar).
+  const lector = useRef({ texto: '', ultima: 0 })
+  const alLeerCodigo = useRef<(codigo: string) => void>(() => {})
+  alLeerCodigo.current = (codigo) => {
+    const leido = buscarCodigo(codigo)
+    if (leido) agregar(leido.p, leido.x)
+    else setMsg({ tipo: 'error', texto: `No encontré el código ${codigo}` })
+    buscarRef.current?.focus()
+  }
+  useEffect(() => {
+    const alTeclear = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      // En los campos (buscador, cantidad, recibido…) manda lo que se escribe ahí.
+      if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return
+      const l = lector.current
+      const ahora = performance.now()
+      if (ahora - l.ultima > 60) l.texto = '' // pausa larga: es una persona tecleando
+      l.ultima = ahora
+      if (e.key === 'Enter') {
+        if (l.texto.length >= 4) { e.preventDefault(); e.stopPropagation(); alLeerCodigo.current(l.texto) }
+        l.texto = ''
+      } else if (e.key.length === 1) l.texto += e.key
+    }
+    window.addEventListener('keydown', alTeclear, true)
+    return () => window.removeEventListener('keydown', alTeclear, true)
+  }, [])
 
   return (
     <div className="pos">
@@ -162,6 +259,12 @@ function Ventas() {
         <div className="toolbar" style={{ marginTop: 0 }}>
           <input ref={buscarRef} autoFocus className="buscar" placeholder="Buscar o escanear código… (Enter agrega)"
             value={buscar} onChange={(e) => setBuscar(e.target.value)} onKeyDown={onBuscarKey} />
+          <BotonCamara continuo titulo="Escanear productos" onCodigo={(codigo) => {
+            const leido = buscarCodigo(codigo)
+            if (!leido) return 'No encontré el código ' + codigo
+            agregar(leido.p, leido.x)
+            return '＋ ' + leido.p.nombre + (leido.x ? ' · ' + leido.x.nombre : '')
+          }} />
         </div>
 
         {!buscar && topProductos.length > 0 && (
@@ -185,6 +288,7 @@ function Ventas() {
                 {p.foto_url ? <img src={p.foto_url} alt="" /> : <span className="sinfoto">🍾</span>}
                 <span className="nom">{p.nombre}</span>
                 <span className="pre">{money(p.precio_venta)} <span className="faint" style={{ fontWeight: 400 }}>· {p.existencias} und</span></span>
+                {p.controla_empaques && <span className="desglose" style={{ whiteSpace: 'normal' }}>{resumirEmpaques(p.sueltos, presDe(p.id))}</span>}
                 {ps.length > 0 && (
                   <span className="pos-chips">
                     {ps.map((x) => (
@@ -204,6 +308,27 @@ function Ventas() {
           )}
         </div>
       </div>
+
+      <Modal open={!!faltaAbrir} title="Abrir un empaque" onClose={() => { if (faltaAbrir) setSinAbrir((s) => [...s, faltaAbrir.p.id]) }}>
+        {faltaAbrir && (
+          <div>
+            <p className="muted" style={{ lineHeight: 1.5 }}>
+              No quedan sueltos de <b>{faltaAbrir.p.nombre}</b> para esta venta (faltan {faltaAbrir.falta}). ¿Qué abres?
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+              {faltaAbrir.opciones.map(({ x, quedan }) => (
+                <button key={x.id} type="button" className="btn" style={{ marginTop: 0 }}
+                  onClick={() => setAperturas((as) => [...as, { producto_id: faltaAbrir.p.id, presentacion_id: x.id }])}>
+                  Abrir {x.nombre.toLowerCase()} ({x.factor_unidades} und) · quedan {quedan} cerrada{quedan === 1 ? '' : 's'}
+                </button>
+              ))}
+              <button type="button" className="btn ghost" style={{ marginTop: 0 }} onClick={() => setSinAbrir((s) => [...s, faltaAbrir.p.id])}>
+                Vender sin abrir (revisar el conteo después)
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <aside className={'carrito' + (carritoAbierto ? '' : ' plegado')}>
         {/* En celular: barra fija abajo; al tocarla se despliega el carrito completo */}
@@ -226,6 +351,11 @@ function Ventas() {
               <span className="n">
                 {l.producto.nombre}{l.pres && <span className="faint"> · {l.pres.nombre}</span>}
                 <span className="faint" style={{ display: 'block' }}>{money(precioDe(l))} c/u</span>
+                {!l.pres && l.producto.controla_empaques && aperturas.some((a) => a.producto_id === l.producto.id) && (
+                  <span className="faint" style={{ display: 'block' }}>
+                    📦 abre {aperturas.filter((a) => a.producto_id === l.producto.id).map((a) => pres.find((x) => x.id === a.presentacion_id)?.nombre.toLowerCase()).join(' + ')}
+                  </span>
+                )}
               </span>
               <span className="qty">
                 <button onClick={() => cambiarCantidad(l.key, -1)}>−</button>
@@ -245,7 +375,7 @@ function Ventas() {
         )}
         {gestor && (
           <button className="link-btn" style={{ marginTop: 8 }} onClick={registrarTasa}>
-            🇧🇷 Tasa del Real: {tasa ? money(tasa.valor) + (tasa.es_de_hoy ? ' (hoy)' : ' (desactualizada)') : 'sin registrar'} · cambiar
+            <Pais origen="brasil" />Tasa del Real: {tasa ? money(tasa.valor) + (tasa.es_de_hoy ? ' (hoy)' : ' (desactualizada)') : 'sin registrar'} · cambiar
           </button>
         )}
 

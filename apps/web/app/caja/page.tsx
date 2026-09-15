@@ -20,7 +20,11 @@ interface Actual {
 interface Sesion {
   id: string; fecha_jornada: string; apertura: string; cierre: string; total_ventas: number; esperado_caja: number; contado_efectivo: number
   diferencia: number; esperado_reales: number; contado_reales: number; diferencia_reales: number; observaciones: string | null
+  total_nequi: number; total_bold: number; total_pix: number
 }
+// Lo que va a la cuenta del banco en una jornada: todo lo que no es efectivo.
+const aLaCuenta = (s: { total_nequi: number; total_bold: number; total_pix: number }) =>
+  Number(s.total_nequi) + Number(s.total_bold) + Number(s.total_pix)
 
 const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO')
 const reales = (n: number) => 'R$ ' + (Number(n) || 0).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -123,7 +127,8 @@ function Caja() {
               <div className="s">Contado {money(ultimoCierre.contado_efectivo)} · <Diferencia valor={ultimoCierre.diferencia} /></div></div>
             <div className="tile"><div className="t">Reales esperados</div><div className="v">{reales(ultimoCierre.esperado_reales)}</div>
               <div className="s">Contado {reales(ultimoCierre.contado_reales)} · <Diferencia valor={ultimoCierre.diferencia_reales} esReales /></div></div>
-            <div className="tile"><div className="t">Nequi · Bold · PIX</div><div className="v" style={{ fontSize: 16 }}>{money(ultimoCierre.total_nequi)} · {money(ultimoCierre.total_bold)} · {money(ultimoCierre.total_pix)}</div></div>
+            <div className="tile"><div className="t">Va a la cuenta</div><div className="v">{money(aLaCuenta(ultimoCierre))}</div>
+              <div className="s">Nequi {money(ultimoCierre.total_nequi)} · Bold {money(ultimoCierre.total_bold)} · PIX {money(ultimoCierre.total_pix)}</div></div>
           </div>
         </div>
       )}
@@ -231,8 +236,8 @@ function Caja() {
             </span>
           </div>
           <div className="tabla-wrap" style={{ marginTop: 10 }}>
-            <table className="tabla" style={{ minWidth: 760 }}>
-              <thead><tr><th>Jornada</th><th>Apertura</th><th>Cierre</th><th className="num">Ventas</th><th className="num">Efectivo esperado</th><th className="num">Contado</th><th>Diferencia</th><th>Reales</th></tr></thead>
+            <table className="tabla" style={{ minWidth: 860 }}>
+              <thead><tr><th>Jornada</th><th>Apertura</th><th>Cierre</th><th className="num">Ventas</th><th className="num">A la cuenta</th><th className="num">Efectivo esperado</th><th className="num">Contado</th><th>Diferencia</th><th>Reales</th></tr></thead>
               <tbody>
                 {historial.map((s) => (
                   <tr key={s.id} style={{ cursor: 'default' }} title={s.observaciones ?? ''}>
@@ -240,13 +245,14 @@ function Caja() {
                     <td className="faint">{fechaHora(s.apertura)}</td>
                     <td className="faint">{fechaHora(s.cierre)}</td>
                     <td className="num">{money(s.total_ventas)}</td>
+                    <td className="num" title={'Nequi ' + money(s.total_nequi) + ' · Bold ' + money(s.total_bold) + ' · PIX ' + money(s.total_pix)}>{money(aLaCuenta(s))}</td>
                     <td className="num">{money(s.esperado_caja)}</td>
                     <td className="num">{money(s.contado_efectivo)}</td>
                     <td><Diferencia valor={Number(s.diferencia)} /></td>
                     <td><Diferencia valor={Number(s.diferencia_reales)} esReales /></td>
                   </tr>
                 ))}
-                {historial.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--faint)', padding: 20 }}>No hay cierres en estas fechas.</td></tr>}
+                {historial.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--faint)', padding: 20 }}>No hay cierres en estas fechas.</td></tr>}
               </tbody>
             </table>
           </div>

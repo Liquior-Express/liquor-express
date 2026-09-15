@@ -19,7 +19,7 @@ interface Reporte {
   sin_movimiento: { nombre: string; existencias: number; valor: number }[]
   pola: { productos: { nombre: string; unidades: number; total: number }[]; unidades: number; total: number }
   por_vencer: { nombre: string; cantidad: number; fecha: string; dias: number }[]
-  cierres: { fecha_jornada: string; total_ventas: number; diferencia: number; diferencia_reales: number }[]
+  cierres: { fecha_jornada: string; total_ventas: number; total_nequi: number; total_bold: number; total_pix: number; diferencia: number; diferencia_reales: number }[]
 }
 
 const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO')
@@ -160,6 +160,9 @@ function Reportes() {
               <div className="s">Ventas − costo − gastos</div><Variacion pct={data.comparacion.crecimiento_ganancia} /></div>
             {!unDia && <div className="tile"><div className="t">Promedio por día</div><div className="v">{money(r.promedio_diario)}</div><div className="s">{data.dias} día(s)</div></div>}
             <div className="tile"><div className="t">Valor del inventario</div><div className="v">{money(r.valor_inventario)}</div><div className="s">a costo, hoy</div></div>
+            <div className="tile"><div className="t">Va a la cuenta</div>
+              <div className="v">{money((data?.por_medio ?? []).filter((m) => m.medio !== 'efectivo').reduce((s, m) => s + Number(m.total), 0))}</div>
+              <div className="s">Nequi + Bold + PIX del periodo</div></div>
           </div>
 
           {data.serie.length > 1 && (
@@ -260,13 +263,13 @@ function Reportes() {
             <div>
               <h3>Cierres de caja</h3>
               <div className="tabla-wrap"><table className="tabla" style={{ minWidth: 0 }}>
-                <thead><tr><th>Jornada</th><th className="num">Ventas</th><th className="num">Diferencia</th></tr></thead>
+                <thead><tr><th>Jornada</th><th className="num">Ventas</th><th className="num">A la cuenta</th><th className="num">Diferencia</th></tr></thead>
                 <tbody>
                   {data.cierres.map((c, i) => (
-                    <tr key={i} style={{ cursor: 'default' }}><td>{diaCorto(c.fecha_jornada)}</td><td className="num">{money(c.total_ventas)}</td>
+                    <tr key={i} style={{ cursor: 'default' }}><td>{diaCorto(c.fecha_jornada)}</td><td className="num">{money(c.total_ventas)}</td><td className="num">{money(Number(c.total_nequi) + Number(c.total_bold) + Number(c.total_pix))}</td>
                       <td className="num">{Math.abs(Number(c.diferencia)) < 1 ? <span className="dif-ok">Cuadra ✓</span> : <span className={Number(c.diferencia) > 0 ? 'dif-ok' : 'dif-mal'}>{Number(c.diferencia) > 0 ? '+' : '−'}{money(Math.abs(Number(c.diferencia)))}</span>}</td></tr>
                   ))}
-                  {data.cierres.length === 0 && <tr><td colSpan={3} className="faint" style={{ textAlign: 'center', padding: 16 }}>Sin cierres en el periodo.</td></tr>}
+                  {data.cierres.length === 0 && <tr><td colSpan={4} className="faint" style={{ textAlign: 'center', padding: 16 }}>Sin cierres en el periodo.</td></tr>}
                 </tbody>
               </table></div>
             </div>

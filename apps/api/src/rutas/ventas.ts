@@ -1,6 +1,7 @@
 import type { Express } from 'express'
 import { autenticar, requiereRol, veUtilidad } from '../auth.ts'
-import { hoy, r2, a50, suma, inicioDia, finDia, descontarLotes } from './comun.ts'
+import { hoy, r2, a50, suma, inicioDia, finDia, descontarLotes, hayEmpaques } from './comun.ts'
+import { moverEmpaques } from './empaques.ts'
 
 // Ventas rápidas, historial/anulación y Caja (apertura, entradas/salidas, cierre en pesos y reales).
 // Terminal único: solo hay una caja abierta a la vez y toda venta pertenece a ella.
@@ -8,7 +9,7 @@ import { hoy, r2, a50, suma, inicioDia, finDia, descontarLotes } from './comun.t
 interface Deps {
   db: () => any
   auditar: (usuarioId: string, accion: string, entidad?: string, entidadId?: string, detalle?: unknown) => Promise<void>
-  registrarMovimiento: (productoId: string, tipo: 'entrada' | 'venta' | 'merma' | 'ajuste', cantidad: number, usuarioId: string, referencia?: string) => Promise<void>
+  registrarMovimiento: (productoId: string, tipo: 'entrada' | 'venta' | 'merma' | 'ajuste' | 'apertura', cantidad: number, usuarioId: string, referencia?: string) => Promise<void>
 }
 
 const MEDIOS = ['efectivo', 'nequi', 'bold', 'pix']
@@ -189,8 +190,9 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     if (!sesion) return res.status(409).json({ error: 'La caja está cerrada. Ábrela en el módulo Caja para vender.' })
 
     const ids = [...new Set(items.map((i) => String(i.producto_id)))]
+    const emp = await hayEmpaques(db)
     const { data: prods, error: e1 } = await db().from('productos')
-      .select('id, nombre, precio_venta, costo, costos_variables, existencias, es_pola, activo, controla_vencimiento').in('id', ids)
+      .select('id, nombre, precio_venta, costo, costos_variables, existencias, es_pola, activo, controla_vencimiento' + (emp ? ', controla_empaques' : '')).in('id', ids)
     if (e1) return res.status(500).json({ error: e1.message })
     const presIds = items.map((i) => i.presentacion_id).filter(Boolean)
     const { data: pres } = presIds.length
@@ -212,6 +214,19 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     }
     const total = lineas.reduce((s, l) => s + l.precio_unitario * l.cantidad, 0)
     const costoTotal = lineas.reduce((s, l) => s + l.costo_unitario * l.cantidad, 0)
+
+    // Empaques que se abrieron para vender sueltos (cigarrillos): deben ser del producto vendido.
+    const aperturas: { p: any; pr: any }[] = []
+    if (emp && Array.isArray(b.aperturas) && b.aperturas.length) {
+      const idsPres = [...new Set(b.aperturas.map((a: any) => String(a?.presentacion_id)))] as string[]
+      const { data: presA } = await db().from('presentaciones').select('id, producto_id, nombre, factor_unidades').in('id', idsPres)
+      for (const a of b.aperturas) {
+        const p = prods?.find((x: any) => x.id === a?.producto_id)
+        const pr = presA?.find((x: any) => x.id === a?.presentacion_id && x.producto_id === a?.producto_id)
+        if (!p || !pr || !p.controla_empaques) return res.status(400).json({ error: 'Apertura de empaque inválida' })
+        aperturas.push({ p, pr })
+      }
+    }
 
     // Pago: PIX y efectivo en reales usan la tasa de hoy; el efectivo guarda recibido y cambio.
     let tasa: number | null = null
@@ -279,6 +294,20 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
       if (p.controla_vencimiento) await descontarLotes(db, p.id, unidades)
       await registrarMovimiento(p.id, 'venta', -unidades, req.usuario!.id, `venta ${String(venta.id).slice(0, 8)}`)
       if (nueva < 0) avisos.push(`${p.nombre} quedó en ${nueva} und: revisa el inventario`)
+    }
+    // Control por empaques: primero los empaques que se abrieron, luego lo vendido cerrado o suelto.
+    if (emp) {
+      for (const { p } of porProducto.values()) {
+        if (!p.controla_empaques) continue
+        const suyas = aperturas.filter((a) => a.p.id === p.id)
+        const vendidas = lineas.filter((l) => l.p.id === p.id)
+        avisos.push(...await moverEmpaques(db, p, {
+          aperturas: suyas.map((a) => ({ presentacion_id: a.pr.id, factor: Number(a.pr.factor_unidades) })),
+          cerradas: vendidas.filter((l) => l.pr).map((l) => ({ presentacion_id: l.pr.id, cantidad: -l.cantidad })),
+          sueltos: -vendidas.filter((l) => !l.pr).reduce((s, l) => s + l.cantidad, 0),
+        }))
+        for (const a of suyas) await registrarMovimiento(p.id, 'apertura', 0, req.usuario!.id, `abre ${a.pr.nombre} (${a.pr.factor_unidades} und)`)
+      }
     }
     res.status(201).json({ venta, avisos })
   })
@@ -353,7 +382,7 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     const s = await cajaAbierta()
     if (!s || s.id !== v.sesion_id) return res.status(409).json({ error: 'Solo se pueden anular ventas de la caja abierta (antes del cierre)' })
 
-    const { data: items } = await db().from('venta_items').select('producto_id, cantidad, unidades').eq('venta_id', v.id)
+    const { data: items } = await db().from('venta_items').select('producto_id, cantidad, unidades, presentacion').eq('venta_id', v.id)
     const porProducto = new Map<string, number>()
     for (const i of items ?? []) porProducto.set(i.producto_id, (porProducto.get(i.producto_id) ?? 0) + Number(i.unidades ?? i.cantidad))
     for (const [productoId, unidades] of porProducto) {
@@ -361,6 +390,22 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
       if (!p) continue
       await db().from('productos').update({ existencias: Number(p.existencias) + unidades }).eq('id', productoId)
       await registrarMovimiento(productoId, 'ajuste', unidades, req.usuario!.id, `anulación venta ${String(v.id).slice(0, 8)}`)
+    }
+    // Con control por empaques todo vuelve como se vendió: lo cerrado, cerrado; lo suelto, suelto.
+    // (Los empaques que se abrieron para esa venta siguen abiertos: se abrieron de verdad.)
+    if (porProducto.size && (await hayEmpaques(db))) {
+      const { data: prodsEmp } = await db().from('productos').select('id, nombre').in('id', [...porProducto.keys()]).eq('controla_empaques', true)
+      for (const p of prodsEmp ?? []) {
+        const { data: presP } = await db().from('presentaciones').select('id, nombre').eq('producto_id', p.id)
+        const cerradas: { presentacion_id: string; cantidad: number }[] = []
+        let sueltos = 0
+        for (const i of (items ?? []).filter((x: any) => x.producto_id === p.id)) {
+          const pr = i.presentacion ? presP?.find((x: any) => x.nombre === i.presentacion) : null
+          if (pr) cerradas.push({ presentacion_id: pr.id, cantidad: Number(i.cantidad) })
+          else sueltos += Number(i.unidades ?? i.cantidad)
+        }
+        await moverEmpaques(db, p, { cerradas, sueltos })
+      }
     }
     const { error } = await db().from('ventas')
       .update({ estado: 'anulada', anulada_por: req.usuario!.id, anulada_en: new Date().toISOString(), motivo_anulacion: motivo }).eq('id', v.id)

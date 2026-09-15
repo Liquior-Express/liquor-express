@@ -116,17 +116,20 @@ await insertar('movimientos_inventario', CATALOGO.map((c, i) => ({
 
 // Presentaciones: cervezas por six y caja; cigarrillos por cajetilla y cartón.
 await insertar('presentaciones', [
-  { producto_id: P.aguila.id, nombre: 'Six pack', factor_unidades: 6, precio: 17000 },
-  { producto_id: P.aguila.id, nombre: 'Caja', factor_unidades: 30, precio: 82000 },
-  { producto_id: P.poker.id, nombre: 'Six pack', factor_unidades: 6, precio: 17000 },
-  { producto_id: P.poker.id, nombre: 'Caja', factor_unidades: 30, precio: 82000 },
-  { producto_id: P.club.id, nombre: 'Six pack', factor_unidades: 6, precio: 24000 },
-  { producto_id: P.brahma.id, nombre: 'Six pack', factor_unidades: 6, precio: 20000 },
+  // Cerveza: six y caja al precio de la unidad por la cantidad (precio 0 = se calcula).
+  { producto_id: P.aguila.id, nombre: 'Six pack', factor_unidades: 6, precio: 0 },
+  { producto_id: P.aguila.id, nombre: 'Caja', factor_unidades: 30, precio: 0 },
+  { producto_id: P.poker.id, nombre: 'Six pack', factor_unidades: 6, precio: 0 },
+  { producto_id: P.poker.id, nombre: 'Caja', factor_unidades: 30, precio: 0 },
+  { producto_id: P.club.id, nombre: 'Six pack', factor_unidades: 6, precio: 0 },
+  { producto_id: P.brahma.id, nombre: 'Six pack', factor_unidades: 6, precio: 0 },
+  // Cigarrillos: cajetilla y media llegan cerradas y tienen su propio precio.
   { producto_id: P.marlboro.id, nombre: 'Cajetilla', factor_unidades: 20, precio: 13000 },
-  { producto_id: P.marlboro.id, nombre: 'Cartón', factor_unidades: 200, precio: 125000 },
+  { producto_id: P.marlboro.id, nombre: 'Media cajetilla', factor_unidades: 10, precio: 7000 },
   { producto_id: P.lucky.id, nombre: 'Cajetilla', factor_unidades: 20, precio: 12000 },
+  { producto_id: P.lucky.id, nombre: 'Media cajetilla', factor_unidades: 10, precio: 6500 },
 ])
-console.log('  presentaciones: 9')
+console.log('  presentaciones: 10')
 
 // Lotes con vencimiento (uno vencido y uno por vencer) para ver las alertas.
 await insertar('lotes', [
@@ -239,7 +242,7 @@ for (const fecha of JORNADAS) {
       // A veces se vende por presentación (six de cerveza, cajetilla de cigarrillos).
       const porSix = ['aguila', 'poker', 'club', 'brahma'].includes(p.k) && azar() < 0.25
       const porCajetilla = ['marlboro', 'lucky'].includes(p.k) && azar() < 0.7
-      if (porSix) lineas.push({ p, presentacion: 'Six pack', cantidad: entre(1, 2), factor: 6, precio: p.k === 'club' ? 24000 : p.k === 'brahma' ? 20000 : 17000 })
+      if (porSix) lineas.push({ p, presentacion: 'Six pack', cantidad: entre(1, 2), factor: 6, precio: Number(p.precio_venta) * 6 })
       else if (porCajetilla) lineas.push({ p, presentacion: 'Cajetilla', cantidad: 1, factor: 20, precio: p.k === 'marlboro' ? 13000 : 12000 })
       else lineas.push({ p, presentacion: null, cantidad: entre(1, 4), factor: 1, precio: Number(p.precio_venta) })
     }

@@ -17,7 +17,7 @@ const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es
 const reales = (n: number) => 'R$ ' + (Number(n) || 0).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const hoyLocal = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })
 const fechaHora = (s: string) => new Date(s).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-const MEDIO: Record<string, string> = { efectivo: '💵 Efectivo', nequi: '📱 Nequi', bold: '💳 Bold', pix: '🇧🇷 PIX' }
+const MEDIO: Record<string, string> = { efectivo: '💵 Efectivo', nequi: '📱 Nequi', bold: '💳 Bold', pix: '💠 PIX' }
 
 export default function HistorialPage() {
   return <AppShell active="historial" titulo="Historial de ventas"><Historial /></AppShell>

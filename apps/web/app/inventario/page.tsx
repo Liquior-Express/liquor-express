@@ -10,6 +10,8 @@ import { CostosOrigen, type ResumenCosto } from '../../components/CostosOrigen'
 import { PresentacionesRapidas } from '../../components/PresentacionesRapidas'
 import { ImportarCatalogo } from '../../components/ImportarCatalogo'
 import { desglosar } from '../../lib/conversion'
+import { BotonCamara } from '../../components/EscanerCamara'
+import { resumirEmpaques } from '../../lib/empaques'
 
 interface Categoria { id: string; nombre: string }
 interface Producto {
@@ -17,14 +19,15 @@ interface Producto {
   unidad_base: string; costo?: number; costos_variables?: number; margen_pct?: number
   precio_venta: number; existencias: number; stock_min: number; foto_url: string | null
   es_pola: boolean; controla_vencimiento: boolean; vence_el: string | null; activo: boolean
+  controla_empaques?: boolean; sueltos?: number
 }
-interface Presentacion { id: string; producto_id?: string; nombre: string; factor_unidades: number; precio: number }
+interface Presentacion { id: string; producto_id?: string; nombre: string; factor_unidades: number; precio: number; cerradas?: number; codigo_barras?: string | null }
 interface Movimiento { id: string; tipo: string; cantidad: number; referencia: string | null; creado_en: string }
 
 const money = (n: number) => '$' + (Number(n) || 0).toLocaleString('es-CO', { maximumFractionDigits: 0 })
 const hoyMas = (dias: number) => { const d = new Date(); d.setDate(d.getDate() + dias); return d }
 const fechaCorta = (s: string) => new Date(s).toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' })
-const TIPO_MOV: Record<string, string> = { entrada: 'Entrada', venta: 'Venta', merma: 'Merma', ajuste: 'Ajuste' }
+const TIPO_MOV: Record<string, string> = { entrada: 'Entrada', venta: 'Venta', merma: 'Merma', ajuste: 'Ajuste', apertura: 'Apertura' }
 const unidadCorta = (u: string) => (!u || u === 'unidad' ? 'und' : u)
 
 // Reduce la imagen en el navegador antes de subirla (máx. 800 px, JPEG).
@@ -76,10 +79,13 @@ function InventarioContenido() {
   const [presentaciones, setPresentaciones] = useState<Presentacion[]>([])
   const [movimientos, setMovimientos] = useState<Movimiento[]>([])
   const [presForm, setPresForm] = useState({ nombre: '', factor_unidades: '', precio: '' })
-  const [mermaForm, setMermaForm] = useState({ cantidad: '', motivo: 'vencido' })
+  const [mermaForm, setMermaForm] = useState<{ cantidad: string; motivo: string; presentacion_id?: string }>({ cantidad: '', motivo: 'vencido' })
   const [fotoUrl, setFotoUrl] = useState<string | null>(null)
   const [subiendo, setSubiendo] = useState(false)
   const [nOrigenes, setNOrigenes] = useState(0)
+  // Control por empaques (cigarrillos): conteo de cerradas por presentación y sueltos.
+  const [empaques, setEmpaques] = useState<{ controla: boolean; sueltos: string; cerradas: Record<string, string> }>({ controla: false, sueltos: '0', cerradas: {} })
+  const [codigoPres, setCodigoPres] = useState<{ id: string; valor: string } | null>(null)
   const editId = editando && editando !== 'nuevo' ? editando.id : null
 
   // Alerta de stock mínimo: se abre sola al entrar a Inventario (una vez por visita).
@@ -133,6 +139,7 @@ function InventarioContenido() {
   function abrirNuevo() {
     setForm({ ...vacio }); setMsg(null); setPresentaciones([]); setMovimientos([]); setFotoUrl(null); setNOrigenes(0)
     setPresForm({ nombre: '', factor_unidades: '', precio: '' }); setMermaForm({ cantidad: '', motivo: 'vencido' })
+    setEmpaques({ controla: false, sueltos: '0', cerradas: {} }); setCodigoPres(null)
     setEditando('nuevo')
   }
   async function abrirEditar(p: Producto) {
@@ -145,6 +152,7 @@ function InventarioContenido() {
       es_pola: p.es_pola, controla_vencimiento: p.controla_vencimiento, fecha_vencimiento: p.vence_el ?? '',
     })
     setFotoUrl(p.foto_url); setPresForm({ nombre: '', factor_unidades: '', precio: '' }); setMermaForm({ cantidad: '', motivo: 'vencido' })
+    setEmpaques({ controla: !!p.controla_empaques, sueltos: String(p.sueltos ?? 0), cerradas: {} }); setCodigoPres(null)
     setEditando(p)
     try {
       const [pr, mv] = await Promise.all([
@@ -152,6 +160,7 @@ function InventarioContenido() {
         apiFetch<{ movimientos: Movimiento[] }>(`/api/productos/${p.id}/movimientos`),
       ])
       setPresentaciones(pr.presentaciones); setMovimientos(mv.movimientos)
+      setEmpaques((e) => ({ ...e, cerradas: Object.fromEntries(pr.presentaciones.map((x) => [x.id, String(x.cerradas ?? 0)])) }))
     } catch { setPresentaciones([]); setMovimientos([]) }
   }
 
@@ -233,6 +242,38 @@ function InventarioContenido() {
       cargar()
     } catch (e: any) { setMsg(e.message) }
   }
+  // Conteo de empaques: fija cerradas y sueltos; las existencias quedan en el total contado.
+  async function guardarEmpaques() {
+    if (!editId) return
+    setMsg(null)
+    try {
+      const r = await apiFetch<{ controla: boolean; existencias: number }>(`/api/productos/${editId}/empaques`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          controla: empaques.controla, sueltos: Number(empaques.sueltos) || 0,
+          cerradas: Object.fromEntries(Object.entries(empaques.cerradas).map(([k, v]) => [k, Number(v) || 0])),
+        }),
+      })
+      setForm((f) => ({ ...f, existencias: String(r.existencias) }))
+      setEditando((ed) => (ed && ed !== 'nuevo' ? { ...ed, controla_empaques: r.controla, sueltos: Number(empaques.sueltos) || 0, existencias: r.existencias } : ed))
+      setPresentaciones((ps) => ps.map((x) => ({ ...x, cerradas: Number(empaques.cerradas[x.id] ?? x.cerradas ?? 0) })))
+      setMsg(r.controla ? 'Conteo de empaques guardado' : 'Control por empaques desactivado')
+      const mv = await apiFetch<{ movimientos: Movimiento[] }>(`/api/productos/${editId}/movimientos`)
+      setMovimientos(mv.movimientos)
+      cargar()
+    } catch (e: any) { setMsg(e.message) }
+  }
+  // Código de barras de una presentación: escanear una cajetilla agrega una cajetilla.
+  async function guardarCodigoPres() {
+    if (!codigoPres) return
+    try {
+      const r = await apiFetch<{ presentacion: { id: string; codigo_barras: string | null } }>(`/api/presentaciones/${codigoPres.id}/codigo`, {
+        method: 'PUT', body: JSON.stringify({ codigo_barras: codigoPres.valor }),
+      })
+      setPresentaciones((ps) => ps.map((x) => (x.id === r.presentacion.id ? { ...x, codigo_barras: r.presentacion.codigo_barras } : x)))
+      setCodigoPres(null); cargar()
+    } catch (e: any) { setMsg(e.message) }
+  }
   async function borrarPresentacion(pid: string) {
     try { await apiFetch(`/api/presentaciones/${pid}`, { method: 'DELETE' }); setPresentaciones((ps) => ps.filter((x) => x.id !== pid)); cargar() }
     catch (e: any) { setMsg(e.message) }
@@ -240,7 +281,9 @@ function InventarioContenido() {
   async function registrarMerma(e: React.FormEvent) {
     e.preventDefault()
     if (!editId) return
-    const ok = await dialog.confirmar({ title: 'Registrar merma', message: `Se descontarán ${mermaForm.cantidad} unidad(es) por "${mermaForm.motivo}". ¿Confirmar?`, confirmText: 'Registrar', peligro: true })
+    const presMerma = presentaciones.find((x) => x.id === mermaForm.presentacion_id)
+    const que = presMerma ? `${mermaForm.cantidad} × ${presMerma.nombre} (${Number(mermaForm.cantidad) * presMerma.factor_unidades} und)` : `${mermaForm.cantidad} unidad(es)`
+    const ok = await dialog.confirmar({ title: 'Registrar merma', message: `Se descontarán ${que} por "${mermaForm.motivo}". ¿Confirmar?`, confirmText: 'Registrar', peligro: true })
     if (!ok) return
     try {
       await apiFetch(`/api/productos/${editId}/merma`, { method: 'POST', body: JSON.stringify(mermaForm) })
@@ -253,6 +296,11 @@ function InventarioContenido() {
   }
 
   const presDe = (id: string) => todasPres.filter((x) => x.producto_id === id)
+  // Si la base ya tiene el control por empaques (migración 0012), los productos traen el campo.
+  const hayEmpaques = productos.some((p) => p.controla_empaques !== undefined)
+  const editandoConEmpaques = !!(editando && editando !== 'nuevo' && editando.controla_empaques)
+  const presEmpaque = presentaciones.filter((x) => Number(x.factor_unidades) > 1)
+  const totalConteo = (Number(empaques.sueltos) || 0) + presEmpaque.reduce((s, x) => s + (Number(empaques.cerradas[x.id]) || 0) * x.factor_unidades, 0)
   const filtrados = useMemo(() => {
     const q = buscar.trim().toLowerCase()
     return productos.filter((p) => !q || p.nombre.toLowerCase().includes(q) || (p.categoria_nombre ?? '').toLowerCase().includes(q) || (p.codigo_barras ?? '').includes(q))
@@ -308,7 +356,7 @@ function InventarioContenido() {
               const bajo = p.stock_min > 0 && p.existencias <= p.stock_min
               const vencido = p.vence_el && new Date(p.vence_el) < new Date()
               const porVencer = p.vence_el && !vencido && new Date(p.vence_el) <= hoyMas(30)
-              const desg = desglosar(p.existencias, presDe(p.id), unidadCorta(p.unidad_base))
+              const desg = p.controla_empaques ? resumirEmpaques(p.sueltos, presDe(p.id)) : desglosar(p.existencias, presDe(p.id), unidadCorta(p.unidad_base))
               return (
                 <tr key={p.id} className={p.activo ? '' : 'inactivo'} onClick={() => abrirEditar(p)}>
                   <td>
@@ -356,8 +404,11 @@ function InventarioContenido() {
             <input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} required /></div>
 
           <div className="field"><label>Código de barras (opcional)</label>
-            <input value={form.codigo_barras} placeholder="Escanéalo con el lector o escríbelo" onChange={(e) => setForm({ ...form, codigo_barras: e.target.value })}
-              onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() /* el lector envía Enter: no guardar todavía */ }} /></div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input value={form.codigo_barras} placeholder="Escanéalo con el lector o escríbelo" onChange={(e) => setForm({ ...form, codigo_barras: e.target.value })}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() /* el lector envía Enter: no guardar todavía */ }} />
+              <BotonCamara titulo="Leer código de barras" onCodigo={(codigo) => { setForm((f) => ({ ...f, codigo_barras: codigo })) }} />
+            </div></div>
 
           <div className="field"><label>Categoría</label>
             <div style={{ display: 'flex', gap: 8 }}>
@@ -390,8 +441,10 @@ function InventarioContenido() {
 
           <div className="grid2">
             <div className="field"><label>Existencias (unidades)</label>
-              <input type="number" inputMode="numeric" value={form.existencias} onChange={(e) => setForm({ ...form, existencias: e.target.value })} />
-              {desgloseForm && <div className="sugerido">= {desgloseForm}</div>}</div>
+              <input type="number" inputMode="numeric" value={form.existencias} readOnly={editandoConEmpaques} onChange={(e) => setForm({ ...form, existencias: e.target.value })} />
+              {editandoConEmpaques
+                ? <div className="sugerido">Se calcula con el conteo de empaques (más abajo)</div>
+                : desgloseForm && <div className="sugerido">= {desgloseForm}</div>}</div>
             <div className="field"><label>Alerta stock bajo (≤)</label>
               <input type="number" inputMode="numeric" value={form.stock_min} onChange={(e) => setForm({ ...form, stock_min: e.target.value })} /></div>
           </div>
@@ -441,9 +494,23 @@ function InventarioContenido() {
             <h4 className="sub-modal">Presentaciones <span className="faint" style={{ fontWeight: 400 }}>(caja, six, cartón, cajetilla…)</span></h4>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
               {presentaciones.map((pr) => (
-                <div key={pr.id} className="row-between" style={{ fontSize: 13.5 }}>
-                  <span>{pr.nombre} <span className="faint">· {pr.factor_unidades} und · {money(pr.precio)}</span></span>
-                  <button type="button" className="link-btn" title="Quitar" onClick={() => borrarPresentacion(pr.id)}>✕</button>
+                <div key={pr.id}>
+                  <div className="row-between" style={{ fontSize: 13.5 }}>
+                    <span>{pr.nombre} <span className="faint">· {pr.factor_unidades} und · {Number(pr.precio) ? money(pr.precio) : 'precio de la unidad × ' + pr.factor_unidades}{pr.codigo_barras ? ' · ▥ ' + pr.codigo_barras : ''}</span></span>
+                    <span style={{ display: 'flex', gap: 12 }}>
+                      {hayEmpaques && <button type="button" className="link-btn" title="Código de barras de la presentación" onClick={() => setCodigoPres({ id: pr.id, valor: pr.codigo_barras ?? '' })}>▥</button>}
+                      <button type="button" className="link-btn" title="Quitar" onClick={() => borrarPresentacion(pr.id)}>✕</button>
+                    </span>
+                  </div>
+                  {codigoPres?.id === pr.id && (
+                    <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                      <input className="celda" style={{ flex: 1 }} value={codigoPres.valor} placeholder={'Código de la ' + pr.nombre.toLowerCase()}
+                        onChange={(e) => setCodigoPres({ id: pr.id, valor: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); guardarCodigoPres() } }} />
+                      <BotonCamara titulo={'Código de la ' + pr.nombre.toLowerCase()} onCodigo={(c) => { setCodigoPres({ id: pr.id, valor: c }) }} />
+                      <button type="button" className="btn" style={{ marginTop: 0, padding: '0 14px' }} onClick={guardarCodigoPres}>Guardar</button>
+                    </div>
+                  )}
                 </div>
               ))}
               {presentaciones.length === 0 && <span className="faint">Sin presentaciones. Se vende por {form.unidad_base}.</span>}
@@ -451,7 +518,9 @@ function InventarioContenido() {
             <form onSubmit={agregarPresentacion} style={{ display: 'grid', gridTemplateColumns: '1fr 84px 96px auto', gap: 8, alignItems: 'end' }}>
               <div className="field"><label>Nombre</label><input value={presForm.nombre} placeholder="Caja" onChange={(e) => setPresForm({ ...presForm, nombre: e.target.value })} required /></div>
               <div className="field"><label>Unidades</label><input type="number" inputMode="numeric" value={presForm.factor_unidades} placeholder="30" onChange={(e) => setPresForm({ ...presForm, factor_unidades: e.target.value })} required /></div>
-              <div className="field"><label>Precio</label><input type="number" inputMode="numeric" value={presForm.precio} onChange={(e) => setPresForm({ ...presForm, precio: e.target.value })} /></div>
+              <div className="field"><label>Precio</label><input type="number" inputMode="numeric" value={presForm.precio} title="Vacío: se cobra el precio de la unidad por la cantidad"
+                placeholder={presForm.factor_unidades ? String((Number(form.precio_venta) || 0) * Number(presForm.factor_unidades)) : 'por unidad'}
+                onChange={(e) => setPresForm({ ...presForm, precio: e.target.value })} /></div>
               <button className="btn" type="submit" style={{ marginTop: 0, padding: '0 14px', height: 42 }}>＋</button>
             </form>
 
@@ -463,10 +532,47 @@ function InventarioContenido() {
               onExistencias={(n) => { setForm((f) => ({ ...f, existencias: String(n) })); cargar() }}
             />
 
+            {hayEmpaques && (
+              <>
+                <div className="sep-modal" />
+                <h4 className="sub-modal">Control por empaques <span className="faint" style={{ fontWeight: 400 }}>(cigarrillos: cerrados y sueltos por separado)</span></h4>
+                <label className="check"><input type="checkbox" checked={empaques.controla} onChange={(e) => setEmpaques({ ...empaques, controla: e.target.checked })} /> Contar empaques <b>cerrados</b> y <b>sueltos</b> por separado</label>
+                {empaques.controla && presEmpaque.length === 0 && (
+                  <p className="faint" style={{ marginTop: 6 }}>Primero agrega las presentaciones (por ejemplo, Cajetilla 20 y Media cajetilla 10).</p>
+                )}
+                {empaques.controla && presEmpaque.length > 0 && (
+                  <>
+                    <div className="grid2" style={{ marginTop: 8 }}>
+                      {presEmpaque.map((x) => (
+                        <div key={x.id} className="field"><label>{x.nombre} cerradas <span className="faint">({x.factor_unidades} und)</span></label>
+                          <input type="number" inputMode="numeric" min="0" value={empaques.cerradas[x.id] ?? '0'}
+                            onChange={(e) => setEmpaques({ ...empaques, cerradas: { ...empaques.cerradas, [x.id]: e.target.value } })} /></div>
+                      ))}
+                      <div className="field"><label>Sueltos <span className="faint">(del empaque abierto)</span></label>
+                        <input type="number" inputMode="numeric" min="0" value={empaques.sueltos} onChange={(e) => setEmpaques({ ...empaques, sueltos: e.target.value })} /></div>
+                    </div>
+                    <div className="sugerido">= {totalConteo} unidades en total. Al vender sueltos, el sistema pregunta qué empaque abrir.</div>
+                  </>
+                )}
+                {(empaques.controla || editandoConEmpaques) && (
+                  <button type="button" className="btn ghost" style={{ marginTop: 8, width: '100%' }} onClick={guardarEmpaques}>
+                    {empaques.controla ? 'Guardar conteo de empaques' : 'Desactivar el control por empaques'}
+                  </button>
+                )}
+              </>
+            )}
+
             <div className="sep-modal" />
             <h4 className="sub-modal">Registrar merma</h4>
-            <form onSubmit={registrarMerma} style={{ display: 'grid', gridTemplateColumns: '96px 1fr auto', gap: 8, alignItems: 'end' }}>
+            <form onSubmit={registrarMerma} style={{ display: 'grid', gridTemplateColumns: editandoConEmpaques ? '80px 1fr 1fr auto' : '96px 1fr auto', gap: 8, alignItems: 'end' }}>
               <div className="field"><label>Cantidad</label><input type="number" inputMode="numeric" value={mermaForm.cantidad} onChange={(e) => setMermaForm({ ...mermaForm, cantidad: e.target.value })} required /></div>
+              {editandoConEmpaques && (
+                <div className="field"><label>De</label>
+                  <select value={mermaForm.presentacion_id ?? ''} onChange={(e) => setMermaForm({ ...mermaForm, presentacion_id: e.target.value })}>
+                    <option value="">Sueltos</option>
+                    {presEmpaque.map((x) => <option key={x.id} value={x.id}>{x.nombre} cerrada ({x.factor_unidades} und)</option>)}
+                  </select></div>
+              )}
               <div className="field"><label>Motivo</label>
                 <select value={mermaForm.motivo} onChange={(e) => setMermaForm({ ...mermaForm, motivo: e.target.value })}>
                   <option value="vencido">Vencido</option><option value="faltante">Faltante</option><option value="averia">Avería</option>

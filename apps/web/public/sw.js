@@ -25,7 +25,8 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url)
   if (url.origin !== self.location.origin) return
 
-  if (url.pathname.startsWith('/_next/static/')) {
+  // Archivos de la app y el lector de códigos de la cámara (no cambian): primero lo guardado.
+  if (url.pathname.startsWith('/_next/static/') || url.pathname === '/zxing_reader.wasm') {
     e.respondWith(caches.match(req).then((r) => r || fetch(req).then((res) => guardar(req, res))))
     return
   }

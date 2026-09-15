@@ -1,5 +1,7 @@
 import type { Express } from 'express'
 import { autenticar, requiereRol, veUtilidad, olvidarActividad } from '../auth.ts'
+import { hayEmpaques } from './comun.ts'
+import { moverEmpaques } from './empaques.ts'
 
 // Rutas de las mejoras del Sprint 1: presencia, borrar producto, existencias
 // por presentación, costos por origen (Colombia/Brasil), tasa del Real y ventas rápidas.
@@ -27,7 +29,8 @@ export function registrarExtras(app: Express, { db, auditar, registrarMovimiento
 
   // ── Presentaciones de todos los productos (existencias discriminadas) ──
   app.get('/api/presentaciones', autenticar, async (_req, res) => {
-    const { data, error } = await db().from('presentaciones').select('id, producto_id, nombre, factor_unidades, precio')
+    const cols = 'id, producto_id, nombre, factor_unidades, precio' + ((await hayEmpaques(db)) ? ', cerradas, codigo_barras' : '')
+    const { data, error } = await db().from('presentaciones').select(cols)
     if (error) return res.status(500).json({ error: error.message })
     res.json({ presentaciones: data })
   })
@@ -131,11 +134,24 @@ export function registrarExtras(app: Express, { db, auditar, registrarMovimiento
   app.post('/api/productos/:id/entrada', autenticar, gestor, async (req, res) => {
     const unidades = Number(req.body?.unidades)
     if (!(unidades > 0)) return res.status(400).json({ error: 'Cantidad inválida' })
-    const { data: p } = await db().from('productos').select('existencias').eq('id', req.params.id).maybeSingle()
+    const { data: p } = await db().from('productos').select('*').eq('id', req.params.id).maybeSingle()
     if (!p) return res.status(404).json({ error: 'Producto no encontrado' })
+    // Con control por empaques, lo que entra por presentación son empaques cerrados; por unidad, sueltos.
+    let presEntrada: any = null
+    if (p.controla_empaques && req.body?.presentacion_id) {
+      const { data } = await db().from('presentaciones').select('id, factor_unidades').eq('id', req.body.presentacion_id).eq('producto_id', p.id).maybeSingle()
+      if (!data) return res.status(400).json({ error: 'Presentación inválida' })
+      if (unidades % Number(data.factor_unidades) !== 0) return res.status(400).json({ error: 'Las unidades no corresponden a empaques completos' })
+      presEntrada = data
+    }
     const existencias = Number(p.existencias) + unidades
     const { error } = await db().from('productos').update({ existencias }).eq('id', req.params.id)
     if (error) return res.status(500).json({ error: error.message })
+    if (p.controla_empaques) {
+      await moverEmpaques(db, p, presEntrada
+        ? { cerradas: [{ presentacion_id: presEntrada.id, cantidad: unidades / Number(presEntrada.factor_unidades) }] }
+        : { sueltos: unidades })
+    }
     await registrarMovimiento(req.params.id, 'entrada', unidades, req.usuario!.id, String(req.body?.referencia ?? 'entrada').slice(0, 60))
     res.json({ existencias })
   })
