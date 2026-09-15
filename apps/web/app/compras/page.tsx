@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiFetch } from '../../lib/api'
 import { nuevoId } from '../../lib/cola'
@@ -8,10 +8,12 @@ import { AppShell, useSesion } from '../../components/AppShell'
 import { Modal } from '../../components/Modal'
 import { useDialog } from '../../components/Dialog'
 import { Pais } from '../../components/Pais'
+import { BotonCamara } from '../../components/EscanerCamara'
+import { sinCeros } from '../../lib/codigos'
 
 interface Proveedor { id: string; nombre: string; contacto: string | null; nit: string | null; origen: 'colombia' | 'brasil'; activo: boolean }
-interface Producto { id: string; nombre: string; precio_venta: number; margen_pct?: number; controla_vencimiento: boolean; existencias: number; activo: boolean }
-interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number }
+interface Producto { id: string; nombre: string; precio_venta: number; margen_pct?: number; controla_vencimiento: boolean; existencias: number; activo: boolean; codigo_barras?: string | null }
+interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; codigo_barras?: string | null }
 interface Linea { key: string; producto: Producto; presentacion_id: string; cantidad: string; valor_unitario: string; fecha_vencimiento: string; margen_pct: string; precio_venta: string }
 interface CompraFila { id: string; fecha: string; factura: string | null; total: number; forma_pago: string; estado_pago: string; proveedor_nombre: string | null; moneda: string; origen: string }
 
@@ -56,6 +58,7 @@ function Compras() {
   const [cab, setCab] = useState(cabeceraVacia())
   const [lineas, setLineas] = useState<Linea[]>([])
   const [buscar, setBuscar] = useState('')
+  const buscarRef = useRef<HTMLInputElement>(null)
   const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null)
   const [guardando, setGuardando] = useState(false)
   const [provForm, setProvForm] = useState({ nombre: '', contacto: '', nit: '', origen: 'colombia' })
@@ -90,11 +93,95 @@ function Compras() {
       setCab((c) => ({ ...c, proveedor_id: r.proveedor.id }))
     } catch (e: any) { setMsg({ ok: false, texto: e.message }) }
   }
-  function agregarProducto(p: Producto) {
-    setLineas((ls) => [...ls, { key: nuevoId(), producto: p, presentacion_id: '', cantidad: '1', valor_unitario: '', fecha_vencimiento: '', margen_pct: String(p.margen_pct ?? 30), precio_venta: String(p.precio_venta) }])
+  // Agrega el producto a la compra (con la presentación si se leyó el código de una cajetilla, media…).
+  // Si ya está con esa presentación no se repite: se resalta su fila para llenar cantidad y valor.
+  const [resaltada, setResaltada] = useState<string | null>(null)
+  function agregarProducto(p: Producto, presentacionId = '') {
     setBuscar('')
+    const ya = lineas.find((l) => l.producto.id === p.id && l.presentacion_id === presentacionId)
+    if (ya) {
+      setResaltada(ya.key)
+      window.setTimeout(() => setResaltada((k) => (k === ya.key ? null : k)), 1500)
+      setMsg({ ok: true, texto: `${p.nombre} ya está en la compra` })
+      return
+    }
+    setLineas((ls) => [...ls, { key: nuevoId(), producto: p, presentacion_id: presentacionId, cantidad: '1', valor_unitario: '', fecha_vencimiento: '', margen_pct: String(p.margen_pct ?? 30), precio_venta: String(p.precio_venta) }])
   }
   const setLinea = (key: string, cambios: Partial<Linea>) => setLineas((ls) => ls.map((l) => (l.key === key ? { ...l, ...cambios } : l)))
+
+  // ── Lector de código de barras ──
+  // Un código puede ser de un producto o de una presentación (cajetilla, media…). Lo que llega de golpe
+  // al buscador (el lector escribe muy rápido) se toma completo cuando deja de llegar texto o con
+  // Enter/Tab; lo escrito a mano sigue buscando por nombre.
+  function porCodigo(codigo: string): { p: Producto; presentacionId: string } | null {
+    const b = sinCeros(codigo)
+    if (!b) return null
+    const x = pres.find((y) => sinCeros(y.codigo_barras) === b)
+    const dePres = x ? productos.find((q) => q.id === x.producto_id) : undefined
+    if (x && dePres) return { p: dePres, presentacionId: x.id }
+    const p = productos.find((q) => sinCeros(q.codigo_barras) === b)
+    return p ? { p, presentacionId: '' } : null
+  }
+  async function leerCodigo(codigo: string) {
+    const leido = porCodigo(codigo)
+    if (leido) { setMsg(null); agregarProducto(leido.p, leido.presentacionId); return }
+    setBuscar('')
+    const crear = await dialog.confirmar({ title: 'Código nuevo', message: `Ningún producto tiene el código ${codigo}. ¿Lo creas ahora para agregarlo a la compra?`, confirmText: 'Crear producto' })
+    if (!crear) return
+    const nombre = (await dialog.pedir({ title: 'Nuevo producto', label: `Nombre del producto (código ${codigo})`, confirmText: 'Crear y agregar' }))?.trim()
+    if (!nombre) return
+    try {
+      const r = await apiFetch<{ producto: Producto }>('/api/productos', { method: 'POST', body: JSON.stringify({ nombre, codigo_barras: codigo, precio_venta: 0, existencias: 0 }) })
+      setProductos((ps) => [...ps, r.producto])
+      setLineas((ls) => [...ls, { key: nuevoId(), producto: r.producto, presentacion_id: '', cantidad: '1', valor_unitario: '', fecha_vencimiento: '', margen_pct: String(r.producto.margen_pct ?? 30), precio_venta: '' }])
+      setMsg({ ok: true, texto: `${r.producto.nombre} quedó creado: completa cantidad, valor y precio de venta` })
+    } catch (e: any) { setMsg({ ok: false, texto: e.message }) }
+  }
+  const rafaga = useRef({ letras: 0, ultima: 0, temporizador: 0 })
+  function alEscribirBuscar(valor: string) {
+    const r = rafaga.current
+    const ahora = performance.now()
+    // Hay lectores que entregan el código entero de una vez: también es una lectura.
+    r.letras = valor.length - buscar.length >= 4 ? valor.length : ahora - r.ultima > 60 ? 1 : r.letras + 1
+    r.ultima = ahora
+    window.clearTimeout(r.temporizador)
+    setBuscar(valor)
+    const q = valor.trim()
+    if (r.letras > 1 && /^\d{4,}$/.test(q)) r.temporizador = window.setTimeout(() => { r.letras = 0; leerCodigo(q) }, 90)
+  }
+  function onBuscarKey(e: React.KeyboardEvent) {
+    const r = rafaga.current
+    const q = buscar.trim()
+    const deLector = r.letras >= 4 && performance.now() - r.ultima < 100 && /^\d+$/.test(q)
+    if (e.key === 'Tab' && deLector) { e.preventDefault(); window.clearTimeout(r.temporizador); r.letras = 0; leerCodigo(q); return }
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    window.clearTimeout(r.temporizador)
+    if (!q) return
+    // Un código (leído, o escrito a mano si es de un producto) entra por código; si no, el primer resultado por nombre.
+    if (/^\d{4,}$/.test(q) && (deLector || porCodigo(q))) { r.letras = 0; leerCodigo(q); return }
+    if (sugerencias[0]) agregarProducto(sugerencias[0])
+  }
+  // Lectura con el cursor fuera de los campos (por ejemplo, después de tocar un botón).
+  const alLeerFuera = useRef<(codigo: string) => void>(() => {})
+  alLeerFuera.current = (codigo) => { leerCodigo(codigo); buscarRef.current?.focus() }
+  useEffect(() => {
+    if (tab !== 'nueva') return
+    const l = { texto: '', ultima: 0 }
+    let t: number | undefined
+    const leer = () => { window.clearTimeout(t); const x = l.texto; l.texto = ''; if (/^\d{4,}$/.test(x)) alLeerFuera.current(x) }
+    const alTeclear = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable)) return
+      const ahora = performance.now()
+      if (ahora - l.ultima > 60) l.texto = ''
+      l.ultima = ahora
+      if (e.key === 'Enter' || e.key === 'Tab') { if (l.texto.length >= 4) { e.preventDefault(); e.stopPropagation(); leer() } return }
+      if (e.key.length === 1) { l.texto += e.key; window.clearTimeout(t); t = window.setTimeout(leer, 90) }
+    }
+    window.addEventListener('keydown', alTeclear, true)
+    return () => { window.removeEventListener('keydown', alTeclear, true); window.clearTimeout(t) }
+  }, [tab])
 
   // Mismo cálculo que el servidor: costos variables repartidos según el valor de cada línea.
   const enBrl = cab.moneda === 'BRL'
@@ -164,7 +251,7 @@ function Compras() {
   }
 
   const q = buscar.trim().toLowerCase()
-  const sugerencias = q ? productos.filter((p) => p.nombre.toLowerCase().includes(q)).slice(0, 8) : []
+  const sugerencias = q ? productos.filter((p) => p.nombre.toLowerCase().includes(q) || (/^\d{4,}$/.test(q) && sinCeros(p.codigo_barras).includes(sinCeros(q)))).slice(0, 8) : []
   const pendientes = compras.filter((c) => c.estado_pago === 'pendiente')
   const fmtMon = enBrl ? reales : money
   // Con la caja menor: saldo y cuánto queda, o aviso si no alcanza.
@@ -213,7 +300,11 @@ function Compras() {
 
           <div className="field" style={{ marginTop: 16 }}>
             <label>Agregar producto</label>
-            <input className="buscar" value={buscar} placeholder="Escribe el nombre del producto…" onChange={(e) => setBuscar(e.target.value)} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input ref={buscarRef} autoFocus className="buscar" style={{ flex: 1 }} value={buscar} placeholder="Escanea el código o escribe el nombre…"
+                onChange={(e) => alEscribirBuscar(e.target.value)} onKeyDown={onBuscarKey} />
+              <BotonCamara titulo="Escanear producto" onCodigo={(codigo) => { leerCodigo(codigo) }} />
+            </div>
             {sugerencias.length > 0 && (
               <div className="sugerencias">
                 {sugerencias.map((p) => <button key={p.id} type="button" onClick={() => agregarProducto(p)}>{p.nombre} <span className="faint">· {p.existencias} und · {money(p.precio_venta)}</span></button>)}
@@ -233,7 +324,7 @@ function Compras() {
                     const c = calculo(l)
                     const ps = pres.filter((x) => x.producto_id === l.producto.id)
                     return (
-                      <tr key={l.key} style={{ cursor: 'default' }}>
+                      <tr key={l.key} style={{ cursor: 'default', background: resaltada === l.key ? 'var(--surface-2)' : undefined, transition: 'background .3s' }}>
                         <td>{l.producto.nombre}{c.unidades > 0 && <span className="desglose">= {c.unidades} und</span>}</td>
                         <td><select className="celda" value={l.presentacion_id} onChange={(e) => setLinea(l.key, { presentacion_id: e.target.value })}>
                           <option value="">Unidad</option>

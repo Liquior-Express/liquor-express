@@ -29,10 +29,24 @@ export function registrarExtras(app: Express, { db, auditar, registrarMovimiento
 
   // ── Presentaciones de todos los productos (existencias discriminadas) ──
   app.get('/api/presentaciones', autenticar, async (_req, res) => {
-    const cols = 'id, producto_id, nombre, factor_unidades, precio' + ((await hayEmpaques(db)) ? ', cerradas, codigo_barras' : '')
+    const emp = await hayEmpaques(db)
+    const cols = 'id, producto_id, nombre, factor_unidades, precio' + (emp ? ', cerradas, codigo_barras' : '')
     const { data, error } = await db().from('presentaciones').select(cols)
     if (error) return res.status(500).json({ error: error.message })
-    res.json({ presentaciones: data })
+    if (emp || !data?.length) return res.json({ presentaciones: data })
+
+    // Sin la actualización 0012 una presentación no tiene código propio: se toma el de un producto
+    // inactivo llamado «Producto · Presentación» (así quedaron las cajetillas y medias de cigarrillos),
+    // para que escanear el empaque lo venda.
+    const { data: alias } = await db().from('productos').select('nombre, codigo_barras')
+      .eq('activo', false).like('nombre', '% · %').not('codigo_barras', 'is', null)
+    if (!alias?.length) return res.json({ presentaciones: data })
+    const { data: prods } = await db().from('productos').select('id, nombre').in('id', [...new Set(data.map((p: any) => p.producto_id))])
+    const nombreDe = new Map<string, string>((prods ?? []).map((p: any) => [p.id, p.nombre]))
+    const codigoDe = new Map<string, string>(alias.map((a: any) => [a.nombre.trim().toLowerCase(), a.codigo_barras]))
+    res.json({
+      presentaciones: data.map((p: any) => ({ ...p, codigo_barras: codigoDe.get(`${nombreDe.get(p.producto_id)} · ${p.nombre}`.toLowerCase()) ?? null })),
+    })
   })
 
   // ── Borrar producto (solo si no tiene ventas ni compras; si las tiene, se desactiva) ──

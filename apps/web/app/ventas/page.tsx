@@ -11,13 +11,11 @@ import { Pais } from '../../components/Pais'
 import { BotonCamara } from '../../components/EscanerCamara'
 import { Modal } from '../../components/Modal'
 import { resumirEmpaques, sueltosFaltantes, cerradasDisponibles, podarAperturas, type Apertura } from '../../lib/empaques'
+import { sinCeros } from '../../lib/codigos'
 
 interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null; codigo_barras: string | null; controla_empaques?: boolean; sueltos?: number }
 interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; precio: number; cerradas?: number; codigo_barras?: string | null }
 
-// Los códigos se comparan sin ceros a la izquierda: al guardar el Excel como número se pierden
-// (080432402825 queda 80432402825) y hay lectores que agregan uno más al leer (EAN-13).
-const sinCeros = (c: string | null | undefined) => (c ?? '').trim().replace(/^0+/, '')
 interface Linea { key: string; producto: Producto; pres: Pres | null; cantidad: number }
 interface Resumen { cantidad: number; total: number; por_medio: Record<string, number>; utilidad?: number }
 interface Top { producto_id: string; nombre: string; veces: number; posicion: number; arrastre: boolean }
