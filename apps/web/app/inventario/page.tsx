@@ -395,6 +395,10 @@ function InventarioContenido() {
         </table>
       </div>
       <p className="faint" style={{ marginTop: 12 }}>{filtrados.length} producto(s){!ve && ' · el costo y la utilidad solo los ve Admin/Gerencia'}</p>
+      {/* Licencia CC BY-SA de las fotos traídas de Open Food Facts: pide citar la fuente. */}
+      <p className="faint" style={{ marginTop: 4, fontSize: 12 }}>
+        Fotos de productos: <a href="https://world.openfoodfacts.org" target="_blank" rel="noopener noreferrer">Open Food Facts</a> (CC BY-SA)
+      </p>
 
       <ImportarCatalogo open={importando} onClose={() => setImportando(false)} onListo={() => { cargar() }} />
 
