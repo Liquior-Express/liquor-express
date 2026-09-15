@@ -53,7 +53,7 @@ function Caja() {
   const [rango, setRango] = useState({ desde: haceDias(29), hasta: hoyLocal() })
   const [base, setBase] = useState({ pesos: '', reales: '', jornada: hoyLocal() })
   const [cerrando, setCerrando] = useState(false)
-  const [conteo, setConteo] = useState({ pesos: '', reales: '', obs: '' })
+  const [conteo, setConteo] = useState({ pesos: '', reales: '', obs: '', aCajaMenor: '' })
   const [ultimoCierre, setUltimoCierre] = useState<any>(null)
   const [msg, setMsg] = useState<string | null>(null)
   // Entrada o salida de efectivo en curso (ventana propia: concepto, moneda y valor).
@@ -101,9 +101,9 @@ function Caja() {
     e.preventDefault(); setMsg(null)
     try {
       const r = await apiFetch<{ cierre: any }>('/api/caja/cerrar', {
-        method: 'POST', body: JSON.stringify({ contado_efectivo: conteo.pesos, contado_reales: Number(conteo.reales) || 0, observaciones: conteo.obs }),
+        method: 'POST', body: JSON.stringify({ contado_efectivo: conteo.pesos, contado_reales: Number(conteo.reales) || 0, observaciones: conteo.obs, a_caja_menor: Number(conteo.aCajaMenor) || 0 }),
       })
-      setUltimoCierre(r.cierre); setCerrando(false); setConteo({ pesos: '', reales: '', obs: '' }); await cargar()
+      setUltimoCierre(r.cierre); setCerrando(false); setConteo({ pesos: '', reales: '', obs: '', aCajaMenor: '' }); await cargar()
     } catch (e: any) { setMsg(e.message) }
   }
 
@@ -127,6 +127,8 @@ function Caja() {
               <div className="s">Contado {money(ultimoCierre.contado_efectivo)} · <Diferencia valor={ultimoCierre.diferencia} /></div></div>
             <div className="tile"><div className="t">Reales esperados</div><div className="v">{reales(ultimoCierre.esperado_reales)}</div>
               <div className="s">Contado {reales(ultimoCierre.contado_reales)} · <Diferencia valor={ultimoCierre.diferencia_reales} esReales /></div></div>
+            <div className="tile"><div className="t">Pasó a la caja menor</div><div className="v">{money(ultimoCierre.a_caja_menor ?? 0)}</div>
+              <div className="s">Queda en el cajón {money(Number(ultimoCierre.contado_efectivo) - Number(ultimoCierre.a_caja_menor ?? 0))}</div></div>
             <div className="tile"><div className="t">Va a la cuenta</div><div className="v">{money(aLaCuenta(ultimoCierre))}</div>
               <div className="s">Nequi {money(ultimoCierre.total_nequi)} · Bold {money(ultimoCierre.total_bold)} · PIX {money(ultimoCierre.total_pix)}</div></div>
           </div>
@@ -159,7 +161,6 @@ function Caja() {
             </span>
             <span style={{ display: 'flex', gap: 8 }}>
               <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => abrirMovimiento('ingreso')}>＋ Entrada</button>
-              <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => abrirMovimiento('egreso')}>− Salida</button>
               <button className="btn" style={{ marginTop: 0 }} onClick={() => { setMsg(null); setCerrando(true) }}>Cerrar caja</button>
             </span>
           </div>
@@ -196,15 +197,6 @@ function Caja() {
             <div className="field"><label>Concepto</label>
               <input autoFocus value={mov.concepto} onChange={(e) => setMov({ ...mov, concepto: e.target.value })}
                 placeholder={mov.tipo === 'ingreso' ? 'p. ej. Base adicional' : 'p. ej. Retiro de los socios'} /></div>
-            {/* Una salida no es un gasto: no baja la ganancia neta. Los gastos del negocio van en Gastos. */}
-            {mov.tipo === 'egreso' && (
-              <p className="faint" style={{ marginTop: -4, lineHeight: 1.45 }}>
-                ¿Es un gasto del negocio (hielo, bolsas, flete)? No va aquí:{' '}
-                {gestor
-                  ? <>regístralo en <a href="/gastos"><b>Gastos y caja menor</b></a> para que cuente en la ganancia.</>
-                  : 'pídele al Admin que lo registre como gasto.'}
-              </p>
-            )}
             <div className="field"><label>Moneda</label>
               <div className="segmento">
                 <button type="button" className={mov.moneda === 'COP' ? 'activo' : ''} onClick={() => setMov({ ...mov, moneda: 'COP' })}>Pesos</button>
@@ -264,8 +256,18 @@ function Caja() {
           <form className="form" style={{ marginTop: 0 }} onSubmit={cerrar}>
             <p className="muted">Jornada del <b>{jornadaLarga(actual.sesion.fecha_jornada)}</b>. Cuenta el dinero del cajón y escríbelo; el sistema calcula si cuadra.</p>
             <div className="field"><label>Efectivo contado en pesos · esperado {money(r.esperado_efectivo)}</label>
-              <input type="number" inputMode="numeric" autoFocus value={conteo.pesos} onChange={(e) => setConteo({ ...conteo, pesos: e.target.value })} required /></div>
+              <input type="number" inputMode="numeric" autoFocus value={conteo.pesos} onChange={(e) => setConteo({ ...conteo, pesos: e.target.value, aCajaMenor: conteo.aCajaMenor === conteo.pesos ? e.target.value : conteo.aCajaMenor })} required /></div>
             {conteo.pesos !== '' && <Diferencia valor={Number(conteo.pesos) - r.esperado_efectivo} />}
+            {conteo.pesos !== '' && (
+              <div className="field"><label>Pasa a la caja menor (pesos)</label>
+                <input type="number" inputMode="numeric" min="0" max={conteo.pesos} value={conteo.aCajaMenor} required
+                  onChange={(e) => setConteo({ ...conteo, aCajaMenor: e.target.value })} />
+                <div className="sugerido">
+                  {Number(conteo.aCajaMenor) < Number(conteo.pesos)
+                    ? `Quedan ${money(Number(conteo.pesos) - (Number(conteo.aCajaMenor) || 0))} en el cajón como base.`
+                    : 'Todo el efectivo contado pasa a la caja menor. Si dejas base para mañana, escribe cuánto pasa.'}
+                </div></div>
+            )}
             <div className="field"><label>Reales contados · esperado {reales(r.esperado_reales)}</label>
               <input type="number" inputMode="decimal" step="0.01" value={conteo.reales} onChange={(e) => setConteo({ ...conteo, reales: e.target.value })} placeholder="0" /></div>
             {(conteo.reales !== '' || r.esperado_reales > 0) && <Diferencia valor={(Number(conteo.reales) || 0) - r.esperado_reales} esReales />}

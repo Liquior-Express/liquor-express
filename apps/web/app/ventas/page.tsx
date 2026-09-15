@@ -14,6 +14,10 @@ import { resumirEmpaques, sueltosFaltantes, cerradasDisponibles, podarAperturas,
 
 interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null; codigo_barras: string | null; controla_empaques?: boolean; sueltos?: number }
 interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; precio: number; cerradas?: number; codigo_barras?: string | null }
+
+// Los códigos se comparan sin ceros a la izquierda: al guardar el Excel como número se pierden
+// (080432402825 queda 80432402825) y hay lectores que agregan uno más al leer (EAN-13).
+const sinCeros = (c: string | null | undefined) => (c ?? '').trim().replace(/^0+/, '')
 interface Linea { key: string; producto: Producto; pres: Pres | null; cantidad: number }
 interface Resumen { cantidad: number; total: number; por_medio: Record<string, number>; utilidad?: number }
 interface Top { producto_id: string; nombre: string; veces: number; posicion: number; arrastre: boolean }
@@ -77,7 +81,8 @@ function Ventas() {
   const filtrados = useMemo(() => {
     const q = buscar.trim().toLowerCase()
     if (!q) return productos
-    return productos.filter((p) => p.nombre.toLowerCase().includes(q) || (p.categoria_nombre ?? '').toLowerCase().includes(q) || (p.codigo_barras ?? '').includes(q))
+    const cod = sinCeros(q)
+    return productos.filter((p) => p.nombre.toLowerCase().includes(q) || (p.categoria_nombre ?? '').toLowerCase().includes(q) || (cod !== '' && sinCeros(p.codigo_barras).includes(cod)))
   }, [productos, buscar])
 
   // Más vendidos del mes que siguen activos, en el orden del podio. Si alguno
@@ -204,38 +209,99 @@ function Ventas() {
     } finally { setCobrando(false) }
   }
 
-  // Enter: primero busca el código de barras exacto (lector); si no, agrega el primer resultado.
+  // Escaneo automático en el buscador: cada lectura entra a la venta con cantidad 1 y el buscador
+  // se limpia, sin esperar Enter (hay lectores que no lo envían).
+  // - Lo que llega de golpe (el lector escribe un carácter cada pocos ms) se toma completo: se espera
+  //   a que deje de llegar texto, así un código que empieza igual que otro más corto no se confunde.
+  //   Si el código no existe, se avisa y se limpia para que la siguiente lectura no quede pegada.
+  // - Lo escrito a mano o pegado se reconoce apenas es un código completo (si no es el comienzo de otro).
+  const ultimaLectura = useRef(0)
+  const rafaga = useRef({ letras: 0, ultima: 0, temporizador: 0 })
+  function esInicioDeOtroCodigo(q: string) {
+    const b = sinCeros(q)
+    return [...productos.map((p) => p.codigo_barras), ...pres.map((x) => x.codigo_barras)].some((c) => {
+      const s = sinCeros(c)
+      return s !== '' && s !== b && s.startsWith(b)
+    })
+  }
+  function leerBuscador(q: string, deLector: boolean) {
+    const leido = buscarCodigo(q)
+    if (!leido && !(deLector && /^\d{4,}$/.test(q))) return false
+    if (leido) agregar(leido.p, leido.x)
+    else setMsg({ tipo: 'error', texto: `No encontré el código ${q}. Si es de un producto, ponle ese código en Inventario.` })
+    ultimaLectura.current = performance.now()
+    rafaga.current.letras = 0
+    setBuscar('')
+    return true
+  }
+  function alEscribirBuscar(valor: string) {
+    const r = rafaga.current
+    const ahora = performance.now()
+    // Hay lectores que entregan el código entero de una vez: también es una lectura.
+    r.letras = valor.length - buscar.length >= 4 ? valor.length : ahora - r.ultima > 60 ? 1 : r.letras + 1
+    r.ultima = ahora
+    window.clearTimeout(r.temporizador)
+    setBuscar(valor)
+    const q = valor.trim()
+    if (q.length < 4) return
+    if (r.letras > 1) r.temporizador = window.setTimeout(() => leerBuscador(q, true), 90)
+    else if (!esInicioDeOtroCodigo(q)) leerBuscador(q, false)
+  }
+
+  // Enter o Tab justo al final de una lectura: se lee ya (y el Tab no mueve el cursor). Con el
+  // buscador vacío (el Enter que llega después de que la lectura ya entró) no hace nada. Enter
+  // en una búsqueda escrita agrega el primer resultado.
   function onBuscarKey(e: React.KeyboardEvent) {
+    const r = rafaga.current
+    const deLector = r.letras >= 4 && performance.now() - r.ultima < 100
+    if (e.key === 'Tab' && (deLector || performance.now() - ultimaLectura.current < 400)) {
+      e.preventDefault()
+      window.clearTimeout(r.temporizador)
+      if (deLector) leerBuscador(buscar.trim(), true)
+      return
+    }
     if (e.key !== 'Enter') return
+    window.clearTimeout(r.temporizador)
     const q = buscar.trim()
-    const leido = q ? buscarCodigo(q) : null
-    if (leido) { agregar(leido.p, leido.x); setBuscar(''); return }
+    if (!q) { e.preventDefault(); return }
+    if (leerBuscador(q, deLector)) { e.preventDefault(); return }
     const elegido = filtrados[0]
     if (elegido) { agregar(elegido, null); setBuscar('') }
-    else if (q) setMsg({ tipo: 'error', texto: `No encontré "${q}"` })
+    else setMsg({ tipo: 'error', texto: `No encontré "${q}"` })
   }
 
   // Un código puede ser de un producto (se vende la unidad) o de una presentación (cajetilla, media…).
   function buscarCodigo(codigo: string): { p: Producto; x: Pres | null } | null {
-    const x = pres.find((y) => y.codigo_barras && y.codigo_barras === codigo)
+    const b = sinCeros(codigo)
+    if (!b) return null
+    const x = pres.find((y) => sinCeros(y.codigo_barras) === b)
     const dePres = x ? productos.find((q) => q.id === x.producto_id) : undefined
     if (x && dePres) return { p: dePres, x }
-    const p = productos.find((q) => q.codigo_barras && q.codigo_barras === codigo)
+    const p = productos.find((q) => sinCeros(q.codigo_barras) === b)
     return p ? { p, x: null } : null
   }
 
-  // Lector de código de barras en toda la pantalla: el lector "escribe" muy rápido y termina
-  // en Enter. Así cada lectura entra directo al carrito aunque el foco haya quedado en un
-  // botón, y ese Enter nunca presiona el botón enfocado (por ejemplo, Cobrar).
+  // Lector de código de barras en toda la pantalla: el lector "escribe" muy rápido. Cada lectura
+  // entra directo a la venta con cantidad 1 aunque el foco haya quedado en un botón, termine o no
+  // en Enter (hay lectores sin Enter al final), y ese Enter o Tab nunca presiona ni mueve el botón
+  // enfocado (por ejemplo, Cobrar).
   const lector = useRef({ texto: '', ultima: 0 })
   const alLeerCodigo = useRef<(codigo: string) => void>(() => {})
   alLeerCodigo.current = (codigo) => {
     const leido = buscarCodigo(codigo)
     if (leido) agregar(leido.p, leido.x)
     else setMsg({ tipo: 'error', texto: `No encontré el código ${codigo}` })
+    ultimaLectura.current = performance.now()
     buscarRef.current?.focus()
   }
   useEffect(() => {
+    let temporizador: number | undefined
+    const leer = () => {
+      window.clearTimeout(temporizador)
+      const texto = lector.current.texto
+      lector.current.texto = ''
+      if (texto.length >= 4) alLeerCodigo.current(texto)
+    }
     const alTeclear = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null
       // En los campos (buscador, cantidad, recibido…) manda lo que se escribe ahí.
@@ -244,21 +310,27 @@ function Ventas() {
       const ahora = performance.now()
       if (ahora - l.ultima > 60) l.texto = '' // pausa larga: es una persona tecleando
       l.ultima = ahora
-      if (e.key === 'Enter') {
-        if (l.texto.length >= 4) { e.preventDefault(); e.stopPropagation(); alLeerCodigo.current(l.texto) }
-        l.texto = ''
-      } else if (e.key.length === 1) l.texto += e.key
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (l.texto.length >= 4) { e.preventDefault(); e.stopPropagation(); leer() }
+        return
+      }
+      if (e.key.length === 1) {
+        l.texto += e.key
+        // Sin Enter al final: si deja de llegar texto, se toma como una lectura completa.
+        window.clearTimeout(temporizador)
+        temporizador = window.setTimeout(leer, 90)
+      }
     }
     window.addEventListener('keydown', alTeclear, true)
-    return () => window.removeEventListener('keydown', alTeclear, true)
+    return () => { window.removeEventListener('keydown', alTeclear, true); window.clearTimeout(temporizador) }
   }, [])
 
   return (
     <div className="pos">
       <div>
         <div className="toolbar" style={{ marginTop: 0 }}>
-          <input ref={buscarRef} autoFocus className="buscar" placeholder="Buscar o escanear código… (Enter agrega)"
-            value={buscar} onChange={(e) => setBuscar(e.target.value)} onKeyDown={onBuscarKey} />
+          <input ref={buscarRef} autoFocus className="buscar" placeholder="Buscar o escanear: el código entra solo"
+            value={buscar} onChange={(e) => alEscribirBuscar(e.target.value)} onKeyDown={onBuscarKey} />
           <BotonCamara continuo titulo="Escanear productos" onCodigo={(codigo) => {
             const leido = buscarCodigo(codigo)
             if (!leido) return 'No encontré el código ' + codigo

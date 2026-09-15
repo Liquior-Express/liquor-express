@@ -63,6 +63,12 @@ export function registrarAdmin(app: Express, { db, auditar }: Deps) {
       // 2) Preparar filas: nuevas vs. existentes (mismo nombre, sin importar mayúsculas).
       const prods = await todas('productos', '*')
       const porNombre = new Map<string, any>(prods.map((p: any) => [p.nombre.trim().toLowerCase(), p]))
+      // El mismo código de barras es el mismo producto aunque cambie el nombre. Se compara sin
+      // ceros a la izquierda (Excel los borra al guardar el código como número).
+      const sinCeros = (c: unknown) => String(c ?? '').trim().replace(/^0+/, '')
+      const porCodigo = new Map<string, any>(prods.filter((p: any) => sinCeros(p.codigo_barras)).map((p: any) => [sinCeros(p.codigo_barras), p]))
+      const codigosVistos = new Set<string>()
+      const tocados = new Set<string>()
       const errores: string[] = []
       const nuevos: any[] = []
       const actualizar: { fila: number; producto: any; campos: any; existencias?: number }[] = []
@@ -86,7 +92,12 @@ export function registrarAdmin(app: Express, { db, auditar }: Deps) {
         if (smin !== undefined) campos.stock_min = smin
         if (!vacio(f.es_pola)) campos.es_pola = siNo(f.es_pola)
         if (!vacio(f.controla_vencimiento)) campos.controla_vencimiento = siNo(f.controla_vencimiento)
-        if (!vacio(f.codigo_barras)) campos.codigo_barras = String(f.codigo_barras).trim()
+        // Códigos de menos de 4 dígitos (1, 2…) son de relleno: el producto queda sin código.
+        const codigo = String(f.codigo_barras ?? '').trim()
+        if (sinCeros(codigo).length >= 4) {
+          if (codigosVistos.has(sinCeros(codigo))) errores.push(`Fila ${fila} (${nombre}): el código ${codigo} ya está en otra fila del archivo; queda sin código`)
+          else { codigosVistos.add(sinCeros(codigo)); campos.codigo_barras = codigo }
+        }
         // Precio y margen: si falta uno, se calcula con el otro y el costo.
         const base = (costo ?? 0) + (cv ?? 0)
         if (precio !== undefined) campos.precio_venta = precio
@@ -94,8 +105,13 @@ export function registrarAdmin(app: Express, { db, auditar }: Deps) {
         if (precio === undefined && margen !== undefined && base > 0) campos.precio_venta = Math.round(base * (1 + margen / 100))
         if (margen === undefined && precio !== undefined && base > 0) campos.margen_pct = Math.round((precio / base - 1) * 100)
 
-        const existente = porNombre.get(clave)
-        if (existente) actualizar.push({ fila, producto: existente, campos, existencias })
+        const existente = (campos.codigo_barras && porCodigo.get(sinCeros(campos.codigo_barras))) || porNombre.get(clave)
+        if (existente && tocados.has(existente.id)) return errores.push(`Fila ${fila} (${nombre}): es el mismo producto de otra fila (${existente.nombre})`)
+        if (existente) {
+          tocados.add(existente.id)
+          if (existente.nombre !== nombre) campos.nombre = nombre
+          actualizar.push({ fila, producto: existente, campos, existencias })
+        }
         else nuevos.push({ fila, datos: { nombre, ...campos, existencias: existencias ?? 0 } })
       })
 

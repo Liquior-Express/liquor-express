@@ -7,7 +7,7 @@ import { AppShell, useSesion } from '../../components/AppShell'
 import { Modal } from '../../components/Modal'
 
 interface Gasto { id: string; categoria: string; descripcion: string | null; valor: number; paga_con: string; fecha: string }
-interface MovCM { id: string; tipo: 'gasto' | 'reposicion'; valor: number; concepto: string | null; origen: string | null; creado_en: string }
+interface MovCM { id: string; tipo: 'gasto' | 'reposicion' | 'compra'; valor: number; concepto: string | null; origen: string | null; creado_en: string }
 interface Arqueo { creado_en: string; usuario: { nombre: string } | null; detalle: { saldo_sistema: number; contado: number; diferencia: number; registrada: boolean } }
 interface CajaMenor { saldo: number; movimientos: MovCM[]; arqueos: Arqueo[] }
 
@@ -18,7 +18,10 @@ const CATEGORIAS: Record<string, string> = {
   arriendo: 'Arriendo', servicios: 'Servicios', nomina: 'Nómina', transporte: 'Transporte',
   mantenimiento: 'Mantenimiento', impuestos: 'Impuestos', otros: 'Otros',
 }
-const PAGA_CON: Record<string, string> = { caja: 'Caja del día', caja_menor: 'Caja menor', transferencia: 'Transferencia' }
+// De la caja del día no sale plata: los gastos se pagan con la caja menor, Nequi o Bold.
+const PAGA_CON: Record<string, string> = { caja_menor: 'Caja menor', nequi: 'Nequi', bold: 'Bold' }
+// Incluye las formas de antes para leer el historial.
+const PAGA_CON_LABEL: Record<string, string> = { ...PAGA_CON, caja: 'Caja del día', transferencia: 'Transferencia' }
 
 export default function GastosPage() {
   return <AppShell active="gastos" titulo="Gastos y caja menor"><Gastos /></AppShell>
@@ -32,7 +35,7 @@ function Gastos() {
   const [rango, setRango] = useState({ desde: primerDiaMes(), hasta: hoyLocal() })
   const [lista, setLista] = useState<{ gastos: Gasto[]; total: number; por_categoria: Record<string, number> } | null>(null)
   const [cm, setCm] = useState<CajaMenor | null>(null)
-  const [form, setForm] = useState({ categoria: 'servicios', descripcion: '', valor: '', paga_con: 'caja', fecha: hoyLocal() })
+  const [form, setForm] = useState({ categoria: 'servicios', descripcion: '', valor: '', paga_con: 'caja_menor', fecha: hoyLocal() })
   const [repo, setRepo] = useState({ valor: '', origen: 'transferencia' })
   // Conteo de la caja menor en curso (ventana propia).
   const [conteo, setConteo] = useState<{ contado: string; registrar: boolean } | null>(null)
@@ -145,11 +148,10 @@ function Gastos() {
             <form onSubmit={reponer} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, alignItems: 'end', marginTop: 12 }}>
               <div className="field"><label>Reponer</label><input type="number" inputMode="numeric" value={repo.valor} onChange={(e) => setRepo({ ...repo, valor: e.target.value })} required /></div>
               <div className="field"><label>Desde</label>
-                <select value={repo.origen} onChange={(e) => setRepo({ ...repo, origen: e.target.value })}>
-                  <option value="transferencia">Transferencia</option><option value="caja">Caja del día</option>
-                </select></div>
+                <input value="La cuenta (Nequi/Bold)" disabled /></div>
               <button className="btn" type="submit" style={{ marginTop: 0, height: 42 }}>Reponer</button>
             </form>
+            <p className="faint" style={{ marginTop: 8, fontSize: 12.5 }}>El efectivo de la caja del día pasa aquí solo, al cerrar la caja.</p>
             <div className="row-between" style={{ marginTop: 10, gap: 8, flexWrap: 'wrap' }}>
               <button type="button" className="btn ghost" style={{ marginTop: 0 }}
                 onClick={() => { setConteoError(null); setConteo({ contado: '', registrar: true }) }}>🧮 Contar caja menor</button>
@@ -189,7 +191,7 @@ function Gastos() {
           {lista?.gastos.map((g) => (
             <div key={g.id} className="row-between" style={{ fontSize: 13, padding: '7px 0', borderBottom: '1px solid var(--line)' }}>
               <span>{CATEGORIAS[g.categoria] ?? g.categoria}{g.descripcion && <span className="faint"> · {g.descripcion}</span>}
-                <span className="faint" style={{ display: 'block', fontSize: 11 }}>{g.fecha} · {PAGA_CON[g.paga_con]}</span></span>
+                <span className="faint" style={{ display: 'block', fontSize: 11 }}>{g.fecha} · {PAGA_CON_LABEL[g.paga_con] ?? g.paga_con}</span></span>
               <b>{money(g.valor)}</b>
             </div>
           ))}

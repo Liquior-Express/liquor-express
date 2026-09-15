@@ -13,13 +13,19 @@ interface Deps {
   registrarMovimiento: (productoId: string, tipo: 'entrada' | 'venta' | 'merma' | 'ajuste', cantidad: number, usuarioId: string, referencia?: string) => Promise<void>
 }
 
-const FORMAS = ['efectivo_caja', 'transferencia', 'credito']
+// De la caja del día no sale plata: las compras se pagan con la caja menor, Nequi o Bold, o quedan a crédito.
+const FORMAS = ['caja_menor', 'nequi', 'bold', 'credito']
+const PAGOS = ['caja_menor', 'nequi', 'bold']
+// Sin la actualización 0013 la base rechaza estas formas de pago.
+const SIN_0013 = 'Para pagar con caja menor, Nequi o Bold falta aplicar la actualización 0013 de la base de datos'
+const pesos = (n: unknown) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO')
+const faltaMigracion = (e: any) => e?.code === '23514' || e?.code === '42703'
 
 export function registrarCompras(app: Express, { db, auditar, registrarMovimiento }: Deps) {
   const gestor = requiereRol('admin', 'gerencia')
 
-  async function cajaAbierta() {
-    const { data } = await db().from('sesiones_caja').select('id').eq('estado', 'abierta').maybeSingle()
+  async function cajaMenor() {
+    const { data } = await db().from('caja_menor').select('id, saldo').limit(1).maybeSingle()
     return data
   }
 
@@ -58,7 +64,8 @@ export function registrarCompras(app: Express, { db, auditar, registrarMovimient
     const items: any[] = Array.isArray(b.items) ? b.items : []
     if (!b.proveedor_id) return res.status(400).json({ error: 'Elige el proveedor' })
     if (items.length === 0) return res.status(400).json({ error: 'Agrega al menos un producto' })
-    const forma = FORMAS.includes(b.forma_pago) ? b.forma_pago : 'transferencia'
+    if (!FORMAS.includes(b.forma_pago)) return res.status(400).json({ error: 'Elige cómo se paga: caja menor, Nequi, Bold o a crédito' })
+    const forma = b.forma_pago
 
     const { data: prov } = await db().from('proveedores').select('id, nombre, origen').eq('id', b.proveedor_id).maybeSingle()
     if (!prov) return res.status(400).json({ error: 'Proveedor inválido' })
@@ -112,9 +119,11 @@ export function registrarCompras(app: Express, { db, auditar, registrarMovimient
     }
     const total = Math.round(subtotalCop + cv)
 
-    // Pago de contado desde la caja: requiere la caja abierta (queda como salida de efectivo).
-    const sesion = forma === 'efectivo_caja' ? await cajaAbierta() : null
-    if (forma === 'efectivo_caja' && !sesion) return res.status(409).json({ error: 'Para pagar con efectivo de la caja, primero ábrela' })
+    // Pago con la caja menor: sale del saldo del fondo.
+    const cm = forma === 'caja_menor' ? await cajaMenor() : null
+    if (forma === 'caja_menor' && !(Number(cm?.saldo) >= total)) {
+      return res.status(409).json({ error: `Saldo de caja menor insuficiente (${pesos(cm?.saldo)})` })
+    }
 
     const { data: compra, error: e2 } = await db().from('compras').insert({
       proveedor_id: prov.id, usuario_id: req.usuario!.id, factura: String(b.factura ?? '').trim() || null,
@@ -123,7 +132,7 @@ export function registrarCompras(app: Express, { db, auditar, registrarMovimient
       pagada_en: forma === 'credito' ? null : new Date().toISOString(),
       pagada_con: forma === 'credito' ? null : forma, notas: String(b.notas ?? '').trim() || null,
     }).select('id, factura').single()
-    if (e2) return res.status(500).json({ error: e2.message })
+    if (e2) return forma !== 'credito' && faltaMigracion(e2) ? res.status(409).json({ error: SIN_0013 }) : res.status(500).json({ error: e2.message })
 
     const { error: e3 } = await db().from('compra_items').insert(lineas.map((l) => ({
       compra_id: compra.id, producto_id: l.p.id, presentacion: l.pr ? l.pr.nombre : null, presentacion_id: l.pr?.id ?? null,
@@ -137,8 +146,14 @@ export function registrarCompras(app: Express, { db, auditar, registrarMovimient
     }
 
     const ref = `Compra ${compra.factura ? compra.factura + ' · ' : ''}${prov.nombre}`
-    if (sesion) {
-      await db().from('movimientos_caja').insert({ sesion_id: sesion.id, tipo: 'egreso', concepto: ref, valor: total, usuario_id: req.usuario!.id, referencia: `compra:${compra.id}` })
+    if (cm) {
+      const { error: e4 } = await db().from('movimientos_caja_menor').insert({ tipo: 'compra', valor: total, compra_id: compra.id, usuario_id: req.usuario!.id, concepto: ref })
+      if (e4) {
+        await db().from('compra_items').delete().eq('compra_id', compra.id)
+        await db().from('compras').delete().eq('id', compra.id)
+        return faltaMigracion(e4) ? res.status(409).json({ error: SIN_0013 }) : res.status(500).json({ error: e4.message })
+      }
+      await db().from('caja_menor').update({ saldo: Number(cm.saldo) - total }).eq('id', cm.id)
     }
 
     // Inventario, lotes, precio y costo por origen de cada producto.
@@ -199,20 +214,27 @@ export function registrarCompras(app: Express, { db, auditar, registrarMovimient
 
   // ── Pagar una compra a crédito ──
   app.post('/api/compras/:id/pagar', autenticar, gestor, async (req, res) => {
-    const forma = req.body?.forma === 'efectivo_caja' ? 'efectivo_caja' : 'transferencia'
+    if (!PAGOS.includes(req.body?.forma)) return res.status(400).json({ error: 'Elige cómo se paga: caja menor, Nequi o Bold' })
+    const forma = req.body.forma
     const { data: c } = await db().from('compras').select('id, total, estado_pago, factura, proveedor:proveedores(nombre)').eq('id', req.params.id).maybeSingle()
     if (!c) return res.status(404).json({ error: 'Compra no encontrada' })
     if (c.estado_pago === 'pagada') return res.status(409).json({ error: 'Esta compra ya está pagada' })
-    if (forma === 'efectivo_caja') {
-      const s = await cajaAbierta()
-      if (!s) return res.status(409).json({ error: 'Para pagar con efectivo de la caja, primero ábrela' })
-      await db().from('movimientos_caja').insert({
-        sesion_id: s.id, tipo: 'egreso', valor: c.total, usuario_id: req.usuario!.id, referencia: `compra:${c.id}`,
-        concepto: `Pago compra ${c.factura ? c.factura + ' · ' : ''}${(c as any).proveedor?.nombre ?? ''}`,
-      })
+    const cm = forma === 'caja_menor' ? await cajaMenor() : null
+    if (forma === 'caja_menor' && !(Number(cm?.saldo) >= Number(c.total))) {
+      return res.status(409).json({ error: `Saldo de caja menor insuficiente (${pesos(cm?.saldo)})` })
     }
+    // Primero se marca pagada: si la base aún no acepta esa forma de pago, no se mueve plata.
     const { error } = await db().from('compras').update({ estado_pago: 'pagada', pagada_en: new Date().toISOString(), pagada_con: forma }).eq('id', c.id)
-    if (error) return res.status(500).json({ error: error.message })
+    if (error) return faltaMigracion(error) ? res.status(409).json({ error: SIN_0013 }) : res.status(500).json({ error: error.message })
+    const concepto = `Pago compra ${c.factura ? c.factura + ' · ' : ''}${(c as any).proveedor?.nombre ?? ''}`
+    if (cm) {
+      const { error: e2 } = await db().from('movimientos_caja_menor').insert({ tipo: 'compra', valor: c.total, compra_id: c.id, usuario_id: req.usuario!.id, concepto })
+      if (e2) {
+        await db().from('compras').update({ estado_pago: 'pendiente', pagada_en: null, pagada_con: null }).eq('id', c.id)
+        return faltaMigracion(e2) ? res.status(409).json({ error: SIN_0013 }) : res.status(500).json({ error: e2.message })
+      }
+      await db().from('caja_menor').update({ saldo: Number(cm.saldo) - Number(c.total) }).eq('id', cm.id)
+    }
     await auditar(req.usuario!.id, 'pagar_compra', 'compras', c.id, { total: c.total, forma })
     res.json({ ok: true })
   })

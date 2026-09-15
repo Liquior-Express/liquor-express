@@ -113,6 +113,11 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     if (!['ingreso', 'egreso'].includes(tipo) || !(valor > 0) || !concepto) {
       return res.status(400).json({ error: 'Tipo, concepto y valor son obligatorios' })
     }
+    // De la caja del día no sale plata: compras y gastos se pagan con la caja menor, Nequi o Bold,
+    // y el efectivo pasa a la caja menor al cerrar.
+    if (tipo === 'egreso') {
+      return res.status(409).json({ error: 'De la caja no sale plata. Los pagos van por caja menor, Nequi o Bold, y el efectivo pasa a la caja menor al cerrar la caja.' })
+    }
     // Pesos es el valor por defecto de la columna; la moneda solo se envía cuando es en reales.
     const { error } = await db().from('movimientos_caja')
       .insert({ sesion_id: s.id, tipo, concepto, valor, usuario_id: req.usuario!.id, ...(moneda === 'BRL' ? { moneda } : {}) })
@@ -135,6 +140,11 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     const contado = Number(req.body.contado_efectivo)
     const contadoR = Number(req.body?.contado_reales) || 0
     if (!(contado >= 0) || contadoR < 0) return res.status(400).json({ error: 'Conteo inválido' })
+    // Al cerrar, el efectivo en pesos pasa a la caja menor: por defecto todo lo contado; si se deja base
+    // para el día siguiente, pasa menos. Los reales se quedan en el cajón (la caja menor es en pesos).
+    const crudoMenor = req.body?.a_caja_menor
+    const aCajaMenor = crudoMenor === undefined || crudoMenor === null || crudoMenor === '' ? contado : Math.round(Number(crudoMenor))
+    if (!(aCajaMenor >= 0) || aCajaMenor > contado) return res.status(400).json({ error: 'Lo que pasa a la caja menor no puede ser más que el efectivo contado' })
 
     const r = await resumenSesion(s)
     const cierre = {
@@ -149,10 +159,16 @@ export function registrarVentasYCaja(app: Express, { db, auditar, registrarMovim
     }
     const { error } = await db().from('sesiones_caja').update(cierre).eq('id', s.id)
     if (error) return res.status(500).json({ error: error.message })
+    if (aCajaMenor > 0) {
+      let { data: cm } = await db().from('caja_menor').select('id, saldo').limit(1).maybeSingle()
+      if (!cm) cm = (await db().from('caja_menor').insert({ saldo: 0 }).select('id, saldo').single()).data
+      await db().from('movimientos_caja_menor').insert({ tipo: 'reposicion', valor: aCajaMenor, origen: 'caja', usuario_id: req.usuario!.id, concepto: `Cierre de caja · jornada ${s.fecha_jornada}` })
+      await db().from('caja_menor').update({ saldo: Number(cm.saldo) + aCajaMenor }).eq('id', cm.id)
+    }
     await auditar(req.usuario!.id, 'cerrar_caja', 'sesiones_caja', s.id, {
-      esperado: r.esperado_efectivo, contado, diferencia: cierre.diferencia, diferencia_reales: cierre.diferencia_reales,
+      esperado: r.esperado_efectivo, contado, diferencia: cierre.diferencia, diferencia_reales: cierre.diferencia_reales, a_caja_menor: aCajaMenor,
     })
-    res.json({ cierre: { ...cierre, fecha_jornada: s.fecha_jornada, apertura: s.apertura, base_apertura: Number(s.base_apertura), base_reales: Number(s.base_reales), resumen: sinUtilidad(r, veUtilidad(req.usuario!.rol)) } })
+    res.json({ cierre: { ...cierre, a_caja_menor: aCajaMenor, fecha_jornada: s.fecha_jornada, apertura: s.apertura, base_apertura: Number(s.base_apertura), base_reales: Number(s.base_reales), resumen: sinUtilidad(r, veUtilidad(req.usuario!.rol)) } })
   })
 
   // Historial de cierres, filtrable por fecha de jornada (por defecto, los últimos 30 días).

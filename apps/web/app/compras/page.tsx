@@ -18,19 +18,24 @@ interface CompraFila { id: string; fecha: string; factura: string | null; total:
 const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO')
 const reales = (n: number) => 'R$ ' + (Number(n) || 0).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const hoyLocal = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })
+// De la caja del día no sale plata: las compras se pagan con la caja menor, Nequi o Bold, o quedan a crédito.
 const FORMAS = [
-  { id: 'transferencia', label: 'Transferencia' },
-  { id: 'efectivo_caja', label: 'Efectivo de la caja' },
+  { id: 'caja_menor', label: 'Caja menor' },
+  { id: 'nequi', label: 'Nequi' },
+  { id: 'bold', label: 'Bold' },
   { id: 'credito', label: 'A crédito' },
 ]
-const FORMA_LABEL: Record<string, string> = { transferencia: 'Transferencia', efectivo_caja: 'Efectivo de caja', credito: 'Crédito' }
+// Incluye las formas de antes para leer el historial.
+const FORMA_LABEL: Record<string, string> = { caja_menor: 'Caja menor', nequi: 'Nequi', bold: 'Bold', credito: 'Crédito', transferencia: 'Transferencia', efectivo_caja: 'Efectivo de caja' }
+type FormaPago = 'caja_menor' | 'nequi' | 'bold'
+const PAGO_TEXTO: Record<FormaPago, string> = { caja_menor: 'con la caja menor', nequi: 'por Nequi', bold: 'por Bold' }
 const TABS = [
   { id: 'nueva', label: 'Nueva compra' }, { id: 'historial', label: 'Historial' },
   { id: 'pagar', label: 'Por pagar' }, { id: 'proveedores', label: 'Proveedores' },
 ] as const
 type Tab = typeof TABS[number]['id']
 
-const cabeceraVacia = () => ({ proveedor_id: '', factura: '', fecha: hoyLocal(), origen: 'colombia', moneda: 'COP', tasa: '', costos_variables: '', forma_pago: 'transferencia', notas: '' })
+const cabeceraVacia = () => ({ proveedor_id: '', factura: '', fecha: hoyLocal(), origen: 'colombia', moneda: 'COP', tasa: '', costos_variables: '', forma_pago: 'caja_menor', notas: '' })
 
 export default function ComprasPage() {
   return <AppShell active="compras" titulo="Compras"><Compras /></AppShell>
@@ -54,6 +59,8 @@ function Compras() {
   const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null)
   const [guardando, setGuardando] = useState(false)
   const [provForm, setProvForm] = useState({ nombre: '', contacto: '', nit: '', origen: 'colombia' })
+  // Saldo de la caja menor, para avisar si alcanza.
+  const [saldoMenor, setSaldoMenor] = useState<number | null>(null)
 
   const cargar = useCallback(async () => {
     const [pv, p, pr, c, t] = await Promise.all([
@@ -65,6 +72,8 @@ function Compras() {
     ])
     setProveedores(pv.proveedores); setProductos(p.productos.filter((x) => x.activo)); setPres(pr.presentaciones); setCompras(c.compras)
     if (t.tasa) setCab((c0) => (c0.tasa ? c0 : { ...c0, tasa: String(t.tasa!.valor) }))
+    const cm = await apiFetch<{ saldo: number }>('/api/caja-menor').catch(() => null)
+    if (cm) setSaldoMenor(Number(cm.saldo))
   }, [])
   useEffect(() => { cargar().catch((e) => setMsg({ ok: false, texto: e.message })) }, [cargar])
 
@@ -137,8 +146,9 @@ function Compras() {
   async function verDetalle(id: string) {
     try { setDetalle(await apiFetch(`/api/compras/${id}`)) } catch (e: any) { setMsg({ ok: false, texto: e.message }) }
   }
-  async function pagar(c: CompraFila, forma: 'efectivo_caja' | 'transferencia') {
-    const ok = await dialog.confirmar({ title: 'Registrar pago', message: `¿Pagar ${money(c.total)} a ${c.proveedor_nombre ?? 'el proveedor'} ${forma === 'efectivo_caja' ? 'con efectivo de la caja' : 'por transferencia'}?`, confirmText: 'Pagar' })
+  async function pagar(c: CompraFila, forma: FormaPago) {
+    const saldo = forma === 'caja_menor' && saldoMenor !== null ? ` Quedan ${money(saldoMenor - Number(c.total))} en caja menor.` : ''
+    const ok = await dialog.confirmar({ title: 'Registrar pago', message: `¿Pagar ${money(c.total)} a ${c.proveedor_nombre ?? 'el proveedor'} ${PAGO_TEXTO[forma]}?${saldo}`, confirmText: 'Pagar' })
     if (!ok) return
     try { await apiFetch(`/api/compras/${c.id}/pagar`, { method: 'POST', body: JSON.stringify({ forma }) }); setMsg({ ok: true, texto: 'Pago registrado' }); cargar() }
     catch (e: any) { setMsg({ ok: false, texto: e.message }) }
@@ -157,6 +167,11 @@ function Compras() {
   const sugerencias = q ? productos.filter((p) => p.nombre.toLowerCase().includes(q)).slice(0, 8) : []
   const pendientes = compras.filter((c) => c.estado_pago === 'pendiente')
   const fmtMon = enBrl ? reales : money
+  // Con la caja menor: saldo y cuánto queda, o aviso si no alcanza.
+  const avisoPago = saldoMenor === null || totalCop <= 0 || cab.forma_pago !== 'caja_menor' ? null
+    : saldoMenor >= totalCop
+      ? { alerta: false, texto: `Saldo de caja menor: ${money(saldoMenor)} · quedan ${money(saldoMenor - totalCop)}.` }
+      : { alerta: true, texto: `La caja menor tiene ${money(saldoMenor)}, no alcanza para ${money(totalCop)}.` }
 
   return (
     <>
@@ -251,9 +266,14 @@ function Compras() {
               <div className="field"><label>Costos variables (flete, cargue…) en pesos — un solo valor</label>
                 <input type="number" inputMode="numeric" value={cab.costos_variables} onChange={(e) => setCab({ ...cab, costos_variables: e.target.value })} placeholder="0" /></div>
               <div className="field"><label>Forma de pago</label>
-                <div className="segmento" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+                <div className="segmento">
                   {FORMAS.map((f) => <button key={f.id} type="button" className={cab.forma_pago === f.id ? 'activo' : ''} onClick={() => setCab({ ...cab, forma_pago: f.id })}>{f.label}</button>)}
                 </div>
+                {avisoPago && (
+                  <div className={avisoPago.alerta ? 'alert' : 'faint'} style={{ marginTop: 8, fontSize: 13 }}>
+                    {avisoPago.texto}
+                  </div>
+                )}
               </div>
               <div className="field"><label>Notas (opcional)</label><input value={cab.notas} onChange={(e) => setCab({ ...cab, notas: e.target.value })} /></div>
             </div>
@@ -295,9 +315,11 @@ function Compras() {
           {pendientes.map((c) => (
             <div key={c.id} className="row-between" style={{ padding: '10px 0', borderBottom: '1px solid var(--line)', gap: 10, flexWrap: 'wrap' }}>
               <span>{c.proveedor_nombre} <span className="faint">· {c.fecha}{c.factura ? ` · F. ${c.factura}` : ''}</span><b style={{ display: 'block' }}>{money(c.total)}</b></span>
-              <span style={{ display: 'flex', gap: 8 }}>
-                <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => pagar(c, 'transferencia')}>Pagar por transferencia</button>
-                <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => pagar(c, 'efectivo_caja')}>Pagar de la caja</button>
+              <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button className="btn ghost" style={{ marginTop: 0 }} disabled={saldoMenor !== null && saldoMenor < Number(c.total)}
+                  title={saldoMenor !== null ? `Saldo de caja menor: ${money(saldoMenor)}` : undefined} onClick={() => pagar(c, 'caja_menor')}>Pagar con caja menor</button>
+                <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => pagar(c, 'nequi')}>Pagar por Nequi</button>
+                <button className="btn ghost" style={{ marginTop: 0 }} onClick={() => pagar(c, 'bold')}>Pagar por Bold</button>
               </span>
             </div>
           ))}
