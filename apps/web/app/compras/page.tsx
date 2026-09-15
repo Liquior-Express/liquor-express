@@ -312,43 +312,44 @@ function Compras() {
             )}
           </div>
 
+          {/* Cada producto en una tarjeta: los campos se acomodan al ancho, sin scroll horizontal. */}
           {lineas.length > 0 && (
-            <div className="tabla-wrap" style={{ marginTop: 12 }}>
-              <table className="tabla" style={{ minWidth: 980 }}>
-                <thead><tr>
-                  <th>Producto</th><th>Llega como</th><th className="num">Cant.</th><th className="num">Valor c/u ({enBrl ? 'R$' : '$'})</th>
-                  <th>Vence</th><th className="num">Costo und</th><th className="num">Margen %</th><th className="num">Precio venta</th><th></th>
-                </tr></thead>
-                <tbody>
-                  {lineas.map((l) => {
-                    const c = calculo(l)
-                    const ps = pres.filter((x) => x.producto_id === l.producto.id)
-                    return (
-                      <tr key={l.key} style={{ cursor: 'default', background: resaltada === l.key ? 'var(--surface-2)' : undefined, transition: 'background .3s' }}>
-                        <td>{l.producto.nombre}{c.unidades > 0 && <span className="desglose">= {c.unidades} und</span>}</td>
-                        <td><select className="celda" value={l.presentacion_id} onChange={(e) => setLinea(l.key, { presentacion_id: e.target.value })}>
+            <div className="compra-lineas">
+              {lineas.map((l) => {
+                const c = calculo(l)
+                const ps = pres.filter((x) => x.producto_id === l.producto.id)
+                return (
+                  <div key={l.key} className={'compra-linea' + (resaltada === l.key ? ' resaltada' : '')}>
+                    <div className="compra-linea-cab">
+                      <b>{l.producto.nombre}</b>
+                      {c.unidades > 0 && <span className="faint">= {c.unidades} und · costo {money(c.costoUnd)} c/u</span>}
+                      <button type="button" className="link-btn" title="Quitar" onClick={() => setLineas((ls) => ls.filter((x) => x.key !== l.key))}>✕</button>
+                    </div>
+                    <div className="compra-linea-campos">
+                      <div><span>Llega como</span>
+                        <select className="celda" value={l.presentacion_id} onChange={(e) => setLinea(l.key, { presentacion_id: e.target.value })}>
                           <option value="">Unidad</option>
                           {ps.map((p) => <option key={p.id} value={p.id}>{p.nombre} ({p.factor_unidades})</option>)}
-                        </select></td>
-                        <td className="num"><input className="celda" style={{ width: 64 }} type="number" inputMode="numeric" value={l.cantidad} onChange={(e) => setLinea(l.key, { cantidad: e.target.value })} /></td>
-                        <td className="num"><input className="celda" style={{ width: 100 }} type="number" inputMode="decimal" step="0.01" value={l.valor_unitario} onChange={(e) => setLinea(l.key, { valor_unitario: e.target.value })} /></td>
-                        <td>{l.producto.controla_vencimiento
-                          ? <input className="celda" type="date" value={l.fecha_vencimiento} onChange={(e) => setLinea(l.key, { fecha_vencimiento: e.target.value })} />
-                          : <span className="faint">—</span>}</td>
-                        <td className="num">{money(c.costoUnd)}</td>
-                        <td className="num"><input className="celda" style={{ width: 58 }} type="number" inputMode="numeric" value={l.margen_pct} onChange={(e) => setLinea(l.key, { margen_pct: e.target.value })} /></td>
-                        <td className="num">
-                          <input className="celda" style={{ width: 90 }} type="number" inputMode="numeric" value={l.precio_venta} onChange={(e) => setLinea(l.key, { precio_venta: e.target.value })} />
-                          {c.sugerido > 0 && Number(l.precio_venta) !== c.sugerido && (
-                            <button type="button" className="link-btn" style={{ display: 'block', fontSize: 11 }} onClick={() => setLinea(l.key, { precio_venta: String(c.sugerido) })}>usar sugerido {money(c.sugerido)}</button>
-                          )}
-                        </td>
-                        <td><button type="button" className="link-btn" title="Quitar" onClick={() => setLineas((ls) => ls.filter((x) => x.key !== l.key))}>✕</button></td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+                        </select></div>
+                      <div><span>Cantidad</span>
+                        <input className="celda" type="number" inputMode="numeric" value={l.cantidad} onChange={(e) => setLinea(l.key, { cantidad: e.target.value })} /></div>
+                      <div><span>Valor c/u ({enBrl ? 'R$' : '$'})</span>
+                        <input className="celda" type="number" inputMode="decimal" step="0.01" value={l.valor_unitario} onChange={(e) => setLinea(l.key, { valor_unitario: e.target.value })} /></div>
+                      {l.producto.controla_vencimiento && (
+                        <div><span>Vence</span>
+                          <input className="celda" type="date" value={l.fecha_vencimiento} onChange={(e) => setLinea(l.key, { fecha_vencimiento: e.target.value })} /></div>
+                      )}
+                      <div><span>Margen %</span>
+                        <input className="celda" type="number" inputMode="numeric" value={l.margen_pct} onChange={(e) => setLinea(l.key, { margen_pct: e.target.value })} /></div>
+                      <div><span>Precio venta (und)</span>
+                        <input className="celda" type="number" inputMode="numeric" value={l.precio_venta} onChange={(e) => setLinea(l.key, { precio_venta: e.target.value })} />
+                        {c.sugerido > 0 && Number(l.precio_venta) !== c.sugerido && (
+                          <button type="button" className="link-btn" style={{ fontSize: 11, textAlign: 'left' }} onClick={() => setLinea(l.key, { precio_venta: String(c.sugerido) })}>usar sugerido {money(c.sugerido)}</button>
+                        )}</div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
 
