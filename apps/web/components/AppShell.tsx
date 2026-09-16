@@ -28,6 +28,7 @@ const NAV: ItemNav[] = [
   { key: 'ventas', label: 'Ventas rápidas', href: '/ventas', icono: '⚡' },
   { key: 'historial', label: 'Historial de ventas', href: '/historial', icono: '🧾' },
   { key: 'caja', label: 'Caja', href: '/caja', icono: '💵' },
+  { key: 'clientes', label: 'Clientes', href: '/clientes', icono: '👥' },
   { key: 'inventario', label: 'Inventario', href: '/inventario', icono: '📦', roles: GESTION },
   { key: 'compras', label: 'Compras', href: '/compras', icono: '📥', roles: GESTION },
   { key: 'gastos', label: 'Gastos y caja menor', href: '/gastos', icono: '💸', roles: GESTION },

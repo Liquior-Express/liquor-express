@@ -413,6 +413,10 @@ registrarAdmin(app, { db, auditar })
 import { registrarEmpaques } from './rutas/empaques.ts'
 registrarEmpaques(app, { db, auditar, registrarMovimiento })
 
+// Clientes para la factura electrónica.
+import { registrarClientes } from './rutas/clientes.ts'
+registrarClientes(app, { db, auditar })
+
 // Crea el bucket de fotos si no existe (idempotente).
 async function asegurarBucket() {
   if (!supabase) return

@@ -12,6 +12,9 @@ import { BotonCamara } from '../../components/EscanerCamara'
 import { Modal } from '../../components/Modal'
 import { resumirEmpaques, sueltosFaltantes, cerradasDisponibles, podarAperturas, type Apertura } from '../../lib/empaques'
 import { sinCeros } from '../../lib/codigos'
+import { PagoDividido, PARTES_INICIALES, calcularDividido, partesAlServidor, partesDesdeServidor, type ParteUI } from '../../components/PagoDividido'
+import { ElegirCliente, documento } from '../../components/Clientes'
+import { VentasCaja, type DetalleVenta } from '../../components/VentasCaja'
 
 interface Producto { id: string; nombre: string; precio_venta: number; existencias: number; foto_url: string | null; activo: boolean; categoria_nombre: string | null; codigo_barras: string | null; controla_empaques?: boolean; sueltos?: number }
 interface Pres { id: string; producto_id: string; nombre: string; factor_unidades: number; precio: number; cerradas?: number; codigo_barras?: string | null }
@@ -19,13 +22,14 @@ interface Pres { id: string; producto_id: string; nombre: string; factor_unidade
 interface Linea { key: string; producto: Producto; pres: Pres | null; cantidad: number }
 interface Resumen { cantidad: number; total: number; por_medio: Record<string, number>; utilidad?: number }
 interface Top { producto_id: string; nombre: string; veces: number; posicion: number; arrastre: boolean }
-type Medio = 'efectivo' | 'nequi' | 'bold' | 'pix'
+type Medio = 'efectivo' | 'nequi' | 'bold' | 'pix' | 'mixto'
+interface Comprador { id: string; nombre: string; tipo_documento: string; numero_documento: string; dv: string | null }
 
 const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO')
 const reales = (n: number) => 'R$ ' + (Number(n) || 0).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const MEDIOS: { id: Medio; label: string }[] = [
   { id: 'efectivo', label: '💵 Efectivo' }, { id: 'nequi', label: '📱 Nequi' },
-  { id: 'bold', label: '💳 Bold' }, { id: 'pix', label: '💠 PIX (R$)' },
+  { id: 'bold', label: '💳 Bold' }, { id: 'pix', label: '💠 PIX (R$)' }, { id: 'mixto', label: '➗ Pago dividido' },
 ]
 const precioDe = (l: { producto: Producto; pres: Pres | null }) =>
   l.pres ? (Number(l.pres.precio) || l.producto.precio_venta * l.pres.factor_unidades) : l.producto.precio_venta
@@ -57,6 +61,15 @@ function Ventas() {
   // cajero decidió vender sin abrir. Las aperturas viajan con la venta al servidor.
   const [aperturas, setAperturas] = useState<Apertura[]>([])
   const [sinAbrir, setSinAbrir] = useState<string[]>([])
+  // Pago dividido: partes (pesos, reales, Nequi…) y en qué moneda se devuelve lo que sobra.
+  const [partes, setPartes] = useState<ParteUI[]>(PARTES_INICIALES)
+  const [cambioEn, setCambioEn] = useState<'COP' | 'BRL'>('COP')
+  // Cliente para la factura electrónica (sin cliente: consumidor final).
+  const [comprador, setComprador] = useState<Comprador | null>(null)
+  const [elegirCliente, setElegirCliente] = useState(false)
+  // Ventas de la caja abierta y corrección de una de ellas (la nueva reemplaza a la anterior).
+  const [verVentas, setVerVentas] = useState(false)
+  const [corrigiendo, setCorrigiendo] = useState<{ id: string; total: number } | null>(null)
 
   const cargar = useCallback(async () => {
     const [p, pr, t, v, c, tp] = await Promise.all([
@@ -78,7 +91,7 @@ function Ventas() {
 
   const filtrados = useMemo(() => {
     const q = buscar.trim().toLowerCase()
-    if (!q) return productos
+    if (!q) return []
     const cod = sinCeros(q)
     return productos.filter((p) => p.nombre.toLowerCase().includes(q) || (p.categoria_nombre ?? '').toLowerCase().includes(q) || (cod !== '' && sinCeros(p.codigo_barras).includes(cod)))
   }, [productos, buscar])
@@ -152,6 +165,7 @@ function Ventas() {
   const unidades = carrito.reduce((s, l) => s + l.cantidad, 0)
   const tasaHoy = tasa?.es_de_hoy ? tasa.valor : null
   const necesitaTasa = medio === 'pix' || (medio === 'efectivo' && pago.moneda === 'BRL')
+  const dividido = calcularDividido(partes, total, tasaHoy)
 
   async function registrarTasa() {
     const v = await dialog.pedir({ title: 'Tasa del Real de hoy', label: 'Pesos por 1 Real (R$)', type: 'number', initial: tasa ? String(tasa.valor) : '', confirmText: 'Guardar' })
@@ -170,9 +184,16 @@ function Ventas() {
       cliente_id: nuevoId(), vendida_en: new Date().toISOString(), medio_pago: medio,
       items: carrito.map((l) => ({ producto_id: l.producto.id, presentacion_id: l.pres?.id ?? null, cantidad: l.cantidad })),
       efectivo: medio === 'efectivo' ? { moneda: pago.moneda, recibido: Number(pago.recibido) || 0, cambio_en: pago.cambioEn } : undefined,
+      pagos: medio === 'mixto' ? partesAlServidor(partes) : undefined,
+      cambio_en: medio === 'mixto' ? cambioEn : undefined,
       aperturas: aperturas.length ? aperturas : undefined,
+      comprador_id: comprador?.id,
+      reemplaza_id: corrigiendo?.id,
     }
-    const limpiar = () => { setCarrito([]); setAperturas([]); setSinAbrir([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setBuscar(''); setCarritoAbierto(false); buscarRef.current?.focus() }
+    const limpiar = () => {
+      setCarrito([]); setAperturas([]); setSinAbrir([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setPartes(PARTES_INICIALES()); setCambioEn('COP')
+      setComprador(null); setCorrigiendo(null); setBuscar(''); setCarritoAbierto(false); buscarRef.current?.focus()
+    }
     try {
       const r = await apiFetch<{ venta: { total: number; valor_reales: number | null; cambio: number | null; cambio_en: string | null }; avisos: string[] }>('/api/ventas', {
         method: 'POST', body: JSON.stringify(body),
@@ -180,11 +201,13 @@ function Ventas() {
       const v = r.venta
       const enReales = v.valor_reales ? ` (${reales(Number(v.valor_reales))})` : ''
       const devolver = v.cambio ? ` · Devolver ${v.cambio_en === 'BRL' ? reales(Number(v.cambio)) : money(Number(v.cambio))}` : ''
-      setMsg({ tipo: 'ok', texto: `Venta registrada: ${money(v.total)}${enReales}${devolver}` + (r.avisos.length ? ' · ' + r.avisos.join(' · ') : '') })
+      setMsg({ tipo: 'ok', texto: `${corrigiendo ? 'Venta corregida' : 'Venta registrada'}: ${money(v.total)}${enReales}${devolver}` + (r.avisos.length ? ' · ' + r.avisos.join(' · ') : '') })
       limpiar()
       cargar()
     } catch (e: any) {
-      if (e?.status === 0) {
+      if (e?.status === 0 && corrigiendo) {
+        setMsg({ tipo: 'error', texto: 'Sin conexión: la corrección no se guardó. Inténtalo cuando vuelva la señal.' })
+      } else if (e?.status === 0) {
         // Sin señal: la venta queda guardada en el equipo y se envía sola al volver la conexión.
         encolarVenta(body)
         setProductos((ps) => ps.map((p) => {
@@ -205,6 +228,69 @@ function Ventas() {
         limpiar()
       } else setMsg({ tipo: 'error', texto: e.message })
     } finally { setCobrando(false) }
+  }
+
+  // Corregir una venta de la caja: sus productos, pago y cliente vuelven al carrito. Al cobrar, la venta
+  // nueva reemplaza a la anterior (que queda anulada y devuelve sus productos).
+  async function corregir(d: DetalleVenta) {
+    // Si hay una venta a medio hacer, se pregunta antes de reemplazarla en el carrito.
+    if (carrito.length && !(await dialog.confirmar({ title: 'Corregir venta', message: 'El carrito tiene productos de una venta sin cobrar. Si sigues, se quitan para cargar la venta que vas a corregir.', confirmText: 'Seguir' }))) return
+    const lineas: Linea[] = []
+    for (const i of d.items) {
+      const p = productos.find((x) => x.id === i.producto_id)
+      const x = p && i.presentacion ? pres.find((y) => y.producto_id === p.id && y.nombre === i.presentacion) ?? null : null
+      if (!p || (i.presentacion && !x)) {
+        setVerVentas(false)
+        setMsg({ tipo: 'error', texto: 'No se puede corregir: ' + i.producto_nombre + (i.presentacion ? ' · ' + i.presentacion : '') + ' ya no está a la venta. Bórrala y vuelve a registrarla.' })
+        return
+      }
+      const key = p.id + ':' + (x?.id ?? 'und')
+      const ya = lineas.find((l) => l.key === key)
+      if (ya) ya.cantidad += Number(i.cantidad)
+      else lineas.push({ key, producto: p, pres: x, cantidad: Number(i.cantidad) })
+    }
+    setCarrito(lineas)
+    setAperturas([])
+    // Los sueltos de esta venta ya salieron: no se pide abrir empaques otra vez.
+    setSinAbrir(lineas.filter((l) => l.producto.controla_empaques).map((l) => l.producto.id))
+    const m = d.venta.medio_pago as Medio
+    setMedio(m)
+    setPago({ ...PAGO_INICIAL, moneda: d.venta.moneda_efectivo === 'BRL' ? 'BRL' : 'COP' })
+    setPartes(m === 'mixto' && d.pagos.length ? partesDesdeServidor(d.pagos) : PARTES_INICIALES())
+    setCambioEn(d.venta.cambio_en === 'BRL' ? 'BRL' : 'COP')
+    setComprador(d.venta.comprador)
+    setCorrigiendo({ id: d.venta.id, total: Number(d.venta.total) })
+    setVerVentas(false)
+    setCarritoAbierto(true)
+    setMsg(null)
+  }
+  function cancelarCorreccion() {
+    setCarrito([]); setAperturas([]); setSinAbrir([]); setMedio('efectivo'); setPago(PAGO_INICIAL); setPartes(PARTES_INICIALES())
+    setComprador(null); setCorrigiendo(null); setMsg(null)
+  }
+
+  // Tarjeta de producto: la misma en el top de más vendidos (con su puesto) y en la búsqueda.
+  function tarjeta(p: Producto, puesto?: { n: number; arrastre: boolean; veces: number }) {
+    const ps = pres.filter((x) => x.producto_id === p.id && Number(x.factor_unidades) > 1).sort((a, b) => a.factor_unidades - b.factor_unidades)
+    const ayuda = puesto ? (puesto.arrastre ? 'Venía en el top del mes pasado; aún no se vende este mes' : 'Puesto ' + puesto.n + ' · ' + puesto.veces + ' venta(s) este mes') : undefined
+    return (
+      <div key={p.id} className={'pos-card' + (puesto ? ' en-top' + (puesto.arrastre ? ' arrastre' : '') : '')} onClick={() => agregar(p, null)} title={ayuda}>
+        {puesto && <span className={'pos-puesto' + (puesto.n <= 3 ? ' p' + puesto.n : '')}><Posicion n={puesto.n} /></span>}
+        {p.foto_url ? <img src={p.foto_url} alt="" /> : <span className="sinfoto">🍾</span>}
+        <span className="nom">{p.nombre}</span>
+        <span className="pre">{money(p.precio_venta)} <span className="faint" style={{ fontWeight: 400 }}>· {p.existencias} und</span></span>
+        {p.controla_empaques && <span className="desglose" style={{ whiteSpace: 'normal' }}>{resumirEmpaques(p.sueltos, presDe(p.id))}</span>}
+        {ps.length > 0 && (
+          <span className="pos-chips">
+            {ps.map((x) => (
+              <button key={x.id} type="button" className="pos-chip" onClick={(e) => { e.stopPropagation(); agregar(p, x) }}>
+                {x.nombre} {money(Number(x.precio) || p.precio_venta * x.factor_unidades)}
+              </button>
+            ))}
+          </span>
+        )}
+      </div>
+    )
   }
 
   // Escaneo automático en el buscador: cada lectura entra a la venta con cantidad 1 y el buscador
@@ -335,48 +421,30 @@ function Ventas() {
             agregar(leido.p, leido.x)
             return '＋ ' + leido.p.nombre + (leido.x ? ' · ' + leido.x.nombre : '')
           }} />
+          <button type="button" className="chip-app" onClick={() => setVerVentas(true)} title="Ver, corregir o borrar las ventas de esta caja">🧾 Ventas de la caja</button>
         </div>
 
-        {!buscar && topProductos.length > 0 && (
-          <div className="top-ventas">
-            <span className="faint" style={{ marginRight: 4 }}>🔥 Más vendidos del mes</span>
-            {topProductos.map(({ t, p, puesto }) => (
-              <button key={p.id} type="button" className={'pos-chip top' + (t.arrastre ? ' arrastre' : '')}
-                title={t.arrastre ? 'Venía en el podio del mes pasado; aún no se vende este mes' : `${t.veces} venta(s) este mes`}
-                onClick={() => agregar(p, null)}>
-                <Posicion n={puesto} />{p.nombre}<b>{money(p.precio_venta)}</b>
-              </button>
-            ))}
+        {!buscar.trim() ? (
+          <>
+            <div className="row-between" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
+              <span className="muted">🔥 <b>Top 10</b> más vendidos del mes</span>
+              <span className="faint">Busca o escanea para ver los demás</span>
+            </div>
+            <div className="pos-grid">
+              {topProductos.map(({ t, p, puesto }) => tarjeta(p, { n: puesto, arrastre: t.arrastre, veces: t.veces }))}
+              {topProductos.length === 0 && (
+                <p className="faint">{cajaAbierta === null ? 'Cargando productos…' : 'Aún no hay ventas este mes. Busca o escanea un producto para venderlo.'}</p>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="pos-grid">
+            {filtrados.map((p) => tarjeta(p))}
+            {filtrados.length === 0 && (
+              <p className="faint">{productos.length ? 'Sin resultados.' : cajaAbierta === null ? 'Cargando productos…' : 'No hay productos activos en el inventario.'}</p>
+            )}
           </div>
         )}
-
-        <div className="pos-grid">
-          {filtrados.map((p) => {
-            const ps = pres.filter((x) => x.producto_id === p.id && Number(x.factor_unidades) > 1).sort((a, b) => a.factor_unidades - b.factor_unidades)
-            return (
-              <div key={p.id} className="pos-card" onClick={() => agregar(p, null)}>
-                {p.foto_url ? <img src={p.foto_url} alt="" /> : <span className="sinfoto">🍾</span>}
-                <span className="nom">{p.nombre}</span>
-                <span className="pre">{money(p.precio_venta)} <span className="faint" style={{ fontWeight: 400 }}>· {p.existencias} und</span></span>
-                {p.controla_empaques && <span className="desglose" style={{ whiteSpace: 'normal' }}>{resumirEmpaques(p.sueltos, presDe(p.id))}</span>}
-                {ps.length > 0 && (
-                  <span className="pos-chips">
-                    {ps.map((x) => (
-                      <button key={x.id} type="button" className="pos-chip" onClick={(e) => { e.stopPropagation(); agregar(p, x) }}>
-                        {x.nombre} {money(Number(x.precio) || p.precio_venta * x.factor_unidades)}
-                      </button>
-                    ))}
-                  </span>
-                )}
-              </div>
-            )
-          })}
-          {filtrados.length === 0 && (
-            cajaAbierta === null
-              ? <p className="faint">Cargando productos…</p>
-              : <p className="faint">{productos.length ? 'Sin resultados.' : 'No hay productos activos en el inventario.'}</p>
-          )}
-        </div>
       </div>
 
       <Modal open={!!faltaAbrir} title="Abrir un empaque" onClose={() => { if (faltaAbrir) setSinAbrir((s) => [...s, faltaAbrir.p.id]) }}>
@@ -400,6 +468,10 @@ function Ventas() {
         )}
       </Modal>
 
+      <VentasCaja open={verVentas} onClose={() => setVerVentas(false)} onCorregir={corregir} onCambio={() => cargar()} />
+      <ElegirCliente open={elegirCliente} onClose={() => setElegirCliente(false)}
+        onElegir={(c) => { setComprador(c); setElegirCliente(false) }} />
+
       <aside className={'carrito' + (carritoAbierto ? '' : ' plegado')}>
         {/* En celular: barra fija abajo; al tocarla se despliega el carrito completo */}
         <button type="button" className="barra-carrito" onClick={() => setCarritoAbierto((v) => !v)}>
@@ -411,10 +483,23 @@ function Ventas() {
         {cajaAbierta === false && (
           <div className="alert" style={{ marginBottom: 12 }}>La caja está cerrada. <a href="/caja"><b>Abrir caja</b></a> para empezar a vender.</div>
         )}
+        {corrigiendo && (
+          <div className="aviso-correccion">
+            <span>✏️ Corrigiendo una venta de <b>{money(corrigiendo.total)}</b>. Al guardar, la anterior queda anulada.</span>
+            <button className="link-btn" onClick={cancelarCorreccion}>Cancelar</button>
+          </div>
+        )}
         <div className="row-between">
-          <h3 className="sub-modal" style={{ margin: 0 }}>Venta actual</h3>
+          <h3 className="sub-modal" style={{ margin: 0 }}>{corrigiendo ? 'Venta corregida' : 'Venta actual'}</h3>
           {carrito.length > 0 && <button className="link-btn" onClick={() => setCarrito([])}>Vaciar</button>}
         </div>
+        <button type="button" className="cliente-venta" onClick={() => setElegirCliente(true)}>
+          <span>👤</span>
+          <span className="n">
+            {comprador ? <><b>{comprador.nombre}</b><span className="faint"> · {documento(comprador)}</span></> : <span className="muted">Consumidor final</span>}
+          </span>
+          <span className="faint">{comprador ? 'Cambiar' : 'Elegir cliente'}</span>
+        </button>
         <div style={{ marginTop: 8 }}>
           {carrito.map((l) => (
             <div key={l.key} className="linea">
@@ -455,9 +540,12 @@ function Ventas() {
           ))}
         </div>
         {medio === 'efectivo' && carrito.length > 0 && <CambioEfectivo total={total} tasa={tasaHoy} valor={pago} onChange={setPago} />}
+        {medio === 'mixto' && carrito.length > 0 && (
+          <PagoDividido total={total} tasa={tasaHoy} partes={partes} onChange={setPartes} cambioEn={cambioEn} onCambioEn={setCambioEn} />
+        )}
         {msg && <div className={msg.tipo === 'ok' ? 'aviso-ok' : 'alert'} style={{ marginBottom: 10 }}>{msg.texto}</div>}
-        <button className="btn grande" disabled={!carrito.length || cobrando || cajaAbierta === false || (necesitaTasa && !tasaHoy)} onClick={cobrar}>
-          {cobrando ? 'Registrando…' : `Cobrar ${money(total)}`}
+        <button className="btn grande" disabled={!carrito.length || cobrando || cajaAbierta === false || (necesitaTasa && !tasaHoy) || (medio === 'mixto' && !dividido.completo)} onClick={cobrar}>
+          {cobrando ? 'Registrando…' : `${corrigiendo ? 'Guardar corrección' : 'Cobrar'} ${money(total)}`}
         </button>
 
         {resumen && (

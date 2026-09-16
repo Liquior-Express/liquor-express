@@ -5,19 +5,23 @@ import { apiFetch } from '../../lib/api'
 import { AppShell, useSesion } from '../../components/AppShell'
 import { Modal } from '../../components/Modal'
 import { useDialog } from '../../components/Dialog'
+import { documento } from '../../components/Clientes'
+import { MEDIO_LABEL, parteLabel } from '../../components/VentasCaja'
 
-interface VentaFila { id: string; total: number; utilidad?: number; medio_pago: string; valor_reales: number | null; moneda_efectivo: string | null; estado: string; creado_en: string; vendida_en: string | null; usuario_nombre: string | null }
+interface VentaFila { id: string; total: number; utilidad?: number; medio_pago: string; valor_reales: number | null; moneda_efectivo: string | null; estado: string; creado_en: string; vendida_en: string | null; usuario_nombre: string | null; comprador_nombre?: string | null }
 interface Resumen { cantidad: number; total: number; anuladas: number; utilidad?: number }
 interface Detalle {
-  venta: VentaFila & { cambio: number | null; cambio_en: string | null; efectivo_recibido: number | null; motivo_anulacion: string | null; sesion_abierta: boolean }
+  venta: VentaFila & { cambio: number | null; cambio_en: string | null; efectivo_recibido: number | null; motivo_anulacion: string | null; sesion_abierta: boolean; puede_corregir: boolean
+    comprador: { nombre: string; tipo_documento: string; numero_documento: string; dv: string | null } | null }
   items: { id: string; producto_nombre: string; presentacion: string | null; cantidad: number; precio_unitario: number }[]
+  pagos: { medio: string; moneda: string; monto: number; valor_pesos: number }[]
 }
 
 const money = (n: number) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO')
 const reales = (n: number) => 'R$ ' + (Number(n) || 0).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const hoyLocal = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })
 const fechaHora = (s: string) => new Date(s).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-const MEDIO: Record<string, string> = { efectivo: '💵 Efectivo', nequi: '📱 Nequi', bold: '💳 Bold', pix: '💠 PIX' }
+const MEDIO = MEDIO_LABEL
 
 export default function HistorialPage() {
   return <AppShell active="historial" titulo="Historial de ventas"><Historial /></AppShell>
@@ -90,7 +94,7 @@ function Historial() {
                 <td>{MEDIO[x.medio_pago] ?? x.medio_pago}{x.moneda_efectivo === 'BRL' && <span className="faint"> (reales)</span>}</td>
                 <td className="num">{money(x.total)}{x.valor_reales ? <span className="desglose">{reales(x.valor_reales)}</span> : null}</td>
                 {gestor && <td className="num">{x.utilidad !== undefined ? money(x.utilidad) : '—'}</td>}
-                <td>{x.usuario_nombre ?? '—'}</td>
+                <td>{x.usuario_nombre ?? '—'}{x.comprador_nombre && <span className="desglose">👤 {x.comprador_nombre}</span>}</td>
                 <td>{x.estado === 'anulada' ? <span className="chip warn">Anulada</span> : <span className="faint">Activa</span>}</td>
               </tr>
             ))}
@@ -103,6 +107,7 @@ function Historial() {
         {v && detalle && (
           <div>
             <p className="muted">{fechaHora(v.vendida_en ?? v.creado_en)} · {MEDIO[v.medio_pago]} · vendió {v.usuario_nombre ?? '—'}</p>
+            <p className="faint" style={{ margin: 0 }}>{v.comprador ? <>Cliente: <b>{v.comprador.nombre}</b> · {documento(v.comprador)}</> : 'Consumidor final'}</p>
             <div style={{ margin: '12px 0' }}>
               {detalle.items.map((i) => (
                 <div key={i.id} className="linea">
@@ -113,15 +118,16 @@ function Historial() {
               ))}
             </div>
             <div className="row-between"><span className="muted">Total</span><b style={{ fontSize: 20 }}>{money(v.total)}</b></div>
-            {v.valor_reales && <div className="row-between faint"><span>En reales</span><span>{reales(v.valor_reales)}</span></div>}
+            {(detalle.pagos ?? []).map((pg, n) => <div key={n} className="row-between faint"><span>{parteLabel(pg)}</span></div>)}
+            {v.valor_reales && v.medio_pago !== 'mixto' && <div className="row-between faint"><span>En reales</span><span>{reales(v.valor_reales)}</span></div>}
             {v.efectivo_recibido && <div className="row-between faint"><span>Recibido</span><span>{v.moneda_efectivo === 'BRL' ? reales(v.efectivo_recibido) : money(v.efectivo_recibido)}</span></div>}
             {v.cambio ? <div className="row-between faint"><span>Cambio</span><span>{v.cambio_en === 'BRL' ? reales(v.cambio) : money(v.cambio)}</span></div> : null}
             {v.utilidad !== undefined && <div className="row-between faint"><span>Utilidad</span><span>{money(v.utilidad)}</span></div>}
 
             {v.estado === 'anulada' ? (
               <div className="alert" style={{ marginTop: 14 }}>Anulada{v.motivo_anulacion ? `: ${v.motivo_anulacion}` : ''}</div>
-            ) : gestor && (
-              v.sesion_abierta
+            ) : (gestor || v.puede_corregir) && (
+              v.puede_corregir
                 ? <button className="btn peligro" style={{ width: '100%', marginTop: 16 }} onClick={anular}>Anular venta</button>
                 : <p className="faint" style={{ marginTop: 14 }}>Solo se pueden anular ventas de la caja abierta (antes del cierre).</p>
             )}

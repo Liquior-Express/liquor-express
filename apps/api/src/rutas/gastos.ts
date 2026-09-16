@@ -138,7 +138,7 @@ export function registrarGastos(app: Express, { db, auditar }: Deps) {
   app.get('/api/flujo', autenticar, gestor, async (req, res) => {
     const { desde, hasta } = rango(req.query)
     const [ventas, movs, compras, gastos, tasasReal] = await Promise.all([
-      db().from('ventas').select('total, medio_pago, creado_en, vendida_en').eq('estado', 'activa')
+      db().from('ventas').select('id, total, medio_pago, creado_en, vendida_en').eq('estado', 'activa')
         .gte('creado_en', inicioDia(desde)).lte('creado_en', finDia(hasta)),
       db().from('movimientos_caja').select('*').is('referencia', null)
         .gte('creado_en', inicioDia(desde)).lte('creado_en', finDia(hasta)),
@@ -159,7 +159,13 @@ export function registrarGastos(app: Express, { db, auditar }: Deps) {
     const por_medio: Record<string, number> = {}
     for (const v of ventas.data ?? []) {
       sumar(diaDe(v.vendida_en ?? v.creado_en), 'ventas', v.total)
-      por_medio[v.medio_pago] = (por_medio[v.medio_pago] ?? 0) + Number(v.total)
+      if (v.medio_pago !== 'mixto') por_medio[v.medio_pago] = (por_medio[v.medio_pago] ?? 0) + Number(v.total)
+    }
+    // Pagos divididos: cada parte suma a su medio.
+    const idsMixtas = (ventas.data ?? []).filter((v: any) => v.medio_pago === 'mixto').map((v: any) => v.id)
+    if (idsMixtas.length) {
+      const { data: partes } = await db().from('venta_pagos').select('medio, valor_pesos').in('venta_id', idsMixtas)
+      for (const p of partes ?? []) por_medio[p.medio] = (por_medio[p.medio] ?? 0) + Number(p.valor_pesos)
     }
     // Entradas/salidas manuales en reales se pasan a pesos con la tasa de ese día (o la última anterior).
     const tasas = tasasReal.data ?? []

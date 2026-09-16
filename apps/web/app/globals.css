@@ -438,3 +438,56 @@ td.num, th.num{ text-align:right; font-variant-numeric:tabular-nums }
   letter-spacing:.03em; color:var(--teal); vertical-align:middle }
 .sello-pola::before{ content:''; width:6px; height:6px; border-radius:50%; background:var(--teal);
   box-shadow:0 0 0 2px rgba(55,194,176,.22) }
+
+/* Top 10 en Ventas rápidas: la misma tarjeta del producto, con su puesto en la esquina.
+   Los tres primeros llevan un borde con el color de su medalla. */
+.pos-card{ position:relative }
+.pos-puesto{ position:absolute; top:6px; left:6px; z-index:1; display:inline-flex; align-items:center; justify-content:center;
+  min-width:30px; height:30px; padding:0 6px; border-radius:999px; background:var(--panel); border:1px solid var(--line-strong);
+  box-shadow:0 2px 8px rgba(0,0,0,.25) }
+.pos-puesto .podio{ margin-right:0 }
+.pos-puesto .podio.otro{ background:transparent; border:none; padding:0; color:var(--text); font-size:12px }
+.pos-card.en-top.arrastre{ opacity:.75 }
+.pos-card.en-top:has(.pos-puesto.p1){ border-color:rgba(233,169,60,.7) }
+.pos-card.en-top:has(.pos-puesto.p2){ border-color:rgba(190,196,205,.6) }
+.pos-card.en-top:has(.pos-puesto.p3){ border-color:rgba(196,128,78,.6) }
+
+/* Medios de pago: "Pago dividido" ocupa la fila completa. */
+.medios .medio:last-child:nth-child(odd){ grid-column:1 / -1 }
+
+/* Pago dividido */
+.dividido{ background:var(--surface); border:1px solid var(--line-strong); border-radius:12px; padding:10px; margin-bottom:12px;
+  display:flex; flex-direction:column; gap:8px }
+.dividido .cambio-titulo{ color:var(--amber-bright); margin-bottom:0 }
+.dividido-parte{ display:flex; flex-direction:column; gap:4px; padding-bottom:8px; border-bottom:1px dashed var(--line) }
+.dividido-monto{ display:flex; align-items:center; gap:6px }
+.dividido-monto input{ flex:1; min-width:0 }
+.dividido .link-btn{ align-self:flex-start }
+.dividido .segmento button:disabled{ opacity:.5; cursor:default }
+
+/* Cliente de la venta y aviso de corrección */
+.cliente-venta{ display:flex; align-items:center; gap:8px; width:100%; margin:8px 0 2px; padding:8px 10px; border-radius:10px;
+  border:1px dashed var(--line-strong); background:transparent; color:var(--text); cursor:pointer; font-family:inherit; font-size:13px; text-align:left }
+.cliente-venta:hover{ border-color:var(--amber) }
+.cliente-venta .n{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.aviso-correccion{ display:flex; align-items:center; gap:8px; justify-content:space-between; margin-bottom:10px; padding:8px 10px;
+  border-radius:10px; font-size:12.5px; line-height:1.4; background:rgba(233,169,60,.12); border:1px solid rgba(233,169,60,.4); color:var(--text) }
+
+/* Clientes */
+.cliente-campos{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:12px }
+.cliente-campos .ancho{ grid-column:1 / -1 }
+@media (max-width:520px){ .cliente-campos{ grid-template-columns:1fr } }
+.cliente-lista{ display:flex; flex-direction:column; gap:6px; margin:10px 0; max-height:50vh; overflow-y:auto }
+.cliente-item{ display:flex; flex-direction:column; gap:2px; text-align:left; padding:9px 11px; border-radius:10px;
+  border:1px solid var(--line); background:var(--surface); color:var(--text); cursor:pointer; font-family:inherit; font-size:13.5px }
+.cliente-item:hover{ border-color:var(--amber) }
+
+/* Ventas de la caja abierta */
+.ventas-caja{ display:flex; flex-direction:column; gap:6px; max-height:60vh; overflow-y:auto }
+.venta-fila{ display:flex; flex-direction:column; gap:3px; text-align:left; padding:9px 11px; border-radius:10px;
+  border:1px solid var(--line); background:var(--surface); color:var(--text); cursor:pointer; font-family:inherit; font-size:13px }
+.venta-fila:hover{ border-color:var(--amber) }
+.venta-fila.anulada{ opacity:.6 }
+.venta-fila-cab{ display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+.venta-fila-total{ margin-left:auto; color:var(--amber-bright) }
+.venta-fila-items{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap }

@@ -21,7 +21,24 @@ export async function hayEmpaques(db: () => any): Promise<boolean> {
   return empaquesListos
 }
 
-export const r2 = (n: number) => Math.round(n * 100) / 100
+// ¿Ya está aplicada la 0014 (clientes y pagos divididos)? Igual que con los empaques: se revisa
+// como mucho cada minuto hasta que aparezca.
+let clientesListos = false
+let ultimaRevisionClientes = 0
+export async function hayClientes(db: () => any): Promise<boolean> {
+  if (clientesListos) return true
+  if (Date.now() - ultimaRevisionClientes < 60_000) return false
+  ultimaRevisionClientes = Date.now()
+  const [a, b] = await Promise.all([
+    db().from('venta_pagos').select('id').limit(1),
+    db().from('ventas').select('comprador_id').limit(1),
+  ])
+  clientesListos = !a.error && !b.error
+  return clientesListos
+}
+export const SIN_0014 = 'Para usar clientes y pagos divididos falta aplicar la actualización 0014 de la base de datos.'
+
+export const r2 =(n: number) => Math.round(n * 100) / 100
 export const a50 = (n: number) => Math.round(n / 50) * 50 // pesos: la moneda más pequeña es de $50
 export const suma = (arr: any[], f: (x: any) => any) => arr.reduce((a, x) => a + (Number(f(x)) || 0), 0)
 
